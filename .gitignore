@@ -1,0 +1,5 @@
+slurm-logs/
+emu/
+*.sh
+report*
+1
