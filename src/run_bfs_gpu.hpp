@@ -24,7 +24,7 @@ using namespace sycl;
 // Forward declare the kernel name in the global scope.
 // This FPGA best practice reduces name mangling in the optimization reports.
 template <int unroll_factor> class ExploreNeighbours;
-template <int unroll_factor> class LevelGenerator;
+// template <int unroll_factor> class LevelGenerator;
 //-------------------------------------------------------------------
 // Return the execution time of the event, in seconds
 //-------------------------------------------------------------------
@@ -53,7 +53,7 @@ event parallel_explorer_kernel(queue &q,
     {
     
    // Define the work-group size and the number of work-groups
-    const size_t local_size = 4;  // Number of work-items per work-group
+    const size_t local_size = 16;  // Number of work-items per work-group
     const size_t global_size = ((no_of_nodes + local_size - 1) / local_size) * local_size;
 
     // Setup the range
@@ -61,6 +61,7 @@ event parallel_explorer_kernel(queue &q,
 
         auto e = q.parallel_for<class ExploreNeighbours<krnl_id>>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
         int tid = item.get_global_linear_id();
+        int lid = item.get_local_id()[0];
         device_ptr<unsigned int> DevicePtr_start(usm_nodes_start+offset);  
         device_ptr<unsigned int> DevicePtr_end(usm_nodes_start + 1+offset);  
         device_ptr<unsigned int> DevicePtr_edges(usm_edges+offset_inds);  
@@ -101,14 +102,22 @@ event parallel_levelgen_kernel(queue &q,
                                 MyUint1 *usm_visited,
                                 int global_level
                                  ){
-                                  
+    int no_of_nodes = no_of_nodes_end - no_of_nodes_start;
+   // Define the work-group size and the number of work-groups
+    const size_t local_size = 16;  // Number of work-items per work-group
+    const size_t global_size = ((no_of_nodes + local_size - 1) / local_size) * local_size;
 
+    // Setup the range
+    nd_range<1> range(global_size, local_size);
 
-        auto e =q.single_task<class LevelGenerator<krnl_id>>( [=]() [[intel::kernel_args_restrict]] {
+        auto e = q.parallel_for<class LevelGenerator>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
+          int tid = item.get_global_linear_id();
+          if (tid < no_of_nodes) {
+        // auto e =q.single_task<class LevelGenerator<krnl_id>>( [=]() [[intel::kernel_args_restrict]] {
           
-          #pragma unroll 8
-          [[intel::initiation_interval(1)]]
-          for(int tid =no_of_nodes_start; tid < no_of_nodes_end; tid++){
+          // #pragma unroll 8
+          // [[intel::initiation_interval(1)]]
+          // for(int tid =no_of_nodes_start; tid < no_of_nodes_end; tid++){
             unsigned int condition = usm_updating_mask[tid];
             if(condition){
               usm_dist[tid] = global_level;
@@ -130,57 +139,36 @@ event pipegen_kernel(queue &q,
                                   
 
 
-        auto e =q.single_task<class PipeGenerator>(  [=]() [[intel::kernel_args_restrict]] {
-          int iter = 0;
-          int temp[BUFFER_SIZE * 2]; 
-          d_type3 temp_pos = 0;
-          [[intel::initiation_interval(1)]]
-          for(int tid =0; tid < no_of_nodes; tid+=BUFFER_SIZE){
-            char condition[BUFFER_SIZE];
-            d_type3 increment = 0;
-            #pragma unroll
-            for(int j = 0; j < BUFFER_SIZE; j++){
-              condition[j] = usm_updating_mask[tid + j];
-              if(condition[j] && ((tid+j) < no_of_nodes) ){
-                increment++;
-              }
-            } 
-            d_type3 current =0;
-            #pragma unroll
-            for(int j = 0; j < BUFFER_SIZE; j++){
-              if(condition[j] && ((tid+j) < no_of_nodes) ){
-                temp[temp_pos+current] = tid + j;
-                current++;
-               
-              }
-            } 
-            temp_pos += increment;
-            if(temp_pos >= BUFFER_SIZE){
-              #pragma unroll
-              for(int j = 0; j < BUFFER_SIZE; j++){
-                usm_pipe[iter+j] = temp[j];
-              }
-              iter += BUFFER_SIZE;
-              #pragma unroll
-              for(int j = 0; j < BUFFER_SIZE; j++){
-                temp[j] = temp[j + BUFFER_SIZE];
-              }
-              temp_pos-=BUFFER_SIZE;
-            }
-            // check if the buffer is filled 
-            // write buffer back to usm_pipe
-          }
-          // dump remaining inside the buffer to the output usm_pipe.
-          for(int rest = 0; rest < temp_pos; rest++){
-            usm_pipe[iter+rest] = temp[rest];
-          }
 
-          d_over[0] = iter + temp_pos;
+          
+  
+    const size_t local_size = 16;  // Number of work-items per work-group
+    const size_t global_size = ((no_of_nodes + local_size - 1) / local_size) * local_size;
+
+    // Setup the range
+    nd_range<1> range(global_size, local_size);
+
+        auto e = q.parallel_for<class PipeGenerator>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
+          int tid = item.get_global_linear_id();
+          sycl::atomic_ref<unsigned int, sycl::memory_order_relaxed,
+        sycl::memory_scope_device,sycl::access::address_space::global_space>
+        atomic_op_global(d_over[0]);
+          if (tid < no_of_nodes) {
+            
+              char condition = usm_updating_mask[tid];
+              if(condition){
+                usm_pipe[atomic_op_global.fetch_add(1)] = tid;
+                // atomic_op_global+=1; 
+              }
+            
+            } 
+        
 
         });
 
 return e;
 }
+                                 
 template <int unroll_factor>
 event maskremove_kernel(queue &q,
                                 int no_of_nodes,
@@ -336,10 +324,10 @@ std::array<double, NUM_COMPUTE_UNITS> execTimesExploreRead;
     q.wait();
  
 
-    e_levelgen_0 =parallel_levelgen_kernel<0>(q,0,numCols/2,usm_dist,usm_updating_mask,usm_visited,global_level);
-    e_levelgen_1 =parallel_levelgen_kernel<1>(q,numCols/2,numCols,usm_dist,usm_updating_mask,usm_visited,global_level);
+    e_levelgen_0 =parallel_levelgen_kernel<0>(q,0,numCols,usm_dist,usm_updating_mask,usm_visited,global_level);
+    // e_levelgen_1 =parallel_levelgen_kernel<1>(q,numCols/2,numCols,usm_dist,usm_updating_mask,usm_visited,global_level);
 
-
+// q.wait();
     e_pipegen =pipegen_kernel<8>(q,numCols,usm_pipe, d_over,usm_updating_mask);
     q.wait();
 

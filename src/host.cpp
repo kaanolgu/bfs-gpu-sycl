@@ -12,7 +12,7 @@
 #include <sycl/sycl.hpp>
 
 #include "exception_handler.hpp"
-#include "run_bfs_fpga.hpp"
+#include "run_bfs_gpu.hpp"
 #include "run_bfs_cpu.hpp"
 #include "graph_load.hpp"
 
