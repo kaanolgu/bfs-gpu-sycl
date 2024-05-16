@@ -25,6 +25,18 @@ else()
 endif()
 
 
+# NUMBER OF COMPUTE UNITS
+if(NOT DEFINED NUMBER_OF_WORKGROUPS)
+    set(NUMBER_OF_WORKGROUPS "16")
+    message(STATUS "NUMBER_OF_WORKGROUPS was not specified.\
+                    \nConfiguring the design to run on the default ${NUMBER_OF_WORKGROUPS} \
+                    \nPlease refer to the README for information on NUMBER_OF_WORKGROUPS selection.")
+else()
+    message(STATUS "WORKGROUP-SIZE: ${NUMBER_OF_WORKGROUPS}")
+endif()
+
+
+
 # These are Windows-specific flags:
 # 1. /EHsc This is a Windows-specific flag that enables exception handling in host code
 # 2. /Qactypes Include ac_types headers and link against ac_types emulation libraries

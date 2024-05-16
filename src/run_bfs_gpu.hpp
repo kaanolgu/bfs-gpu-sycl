@@ -11,6 +11,7 @@ using namespace sycl;
 // This function returns a vector of two (not necessarily distinct) devices,
 // allowing computation to be split across said devices.
 #define MAX_THREADS_PER_BLOCK 256
+#define NUMBER_OF_WORKGROUPS 64
 
 // Aliases for LSU Control Extension types
 // Implemented using template arguments such as prefetch & burst_coalesce
@@ -42,8 +43,8 @@ double GetExecutionTime(const event &e) {
 template <int krnl_id>
 event parallel_explorer_kernel(queue &q,
                                 int no_of_nodes,
-                                unsigned int offset,
-                                unsigned int offset_inds,
+                                unsigned int*offset,
+                                unsigned int*offset_inds,
                                 unsigned int* usm_nodes_start,
                                 unsigned int *usm_edges,
                                 int *usm_dist,
@@ -53,8 +54,11 @@ event parallel_explorer_kernel(queue &q,
     {
     
    // Define the work-group size and the number of work-groups
-    const size_t local_size = 16;  // Number of work-items per work-group
+    const size_t local_size = NUMBER_OF_WORKGROUPS;  // Number of work-items per work-group
     const size_t global_size = ((no_of_nodes + local_size - 1) / local_size) * local_size;
+    int ncus = q.get_device().get_info<info::device::max_compute_units>();
+
+    std::cout<< "number of maximumx compute units" << ncus << "\n";
 
     // Setup the range
     nd_range<1> range(global_size, local_size);
@@ -62,9 +66,10 @@ event parallel_explorer_kernel(queue &q,
         auto e = q.parallel_for<class ExploreNeighbours<krnl_id>>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
         int tid = item.get_global_linear_id();
         int lid = item.get_local_id()[0];
-        device_ptr<unsigned int> DevicePtr_start(usm_nodes_start+offset);  
-        device_ptr<unsigned int> DevicePtr_end(usm_nodes_start + 1+offset);  
-        device_ptr<unsigned int> DevicePtr_edges(usm_edges+offset_inds);  
+        for (int j = 0; j < NUM_COMPUTE_UNITS; j++) {
+        device_ptr<unsigned int> DevicePtr_start(usm_nodes_start+offset[j]);  
+        device_ptr<unsigned int> DevicePtr_end(usm_nodes_start + 1+offset[j]);  
+        device_ptr<unsigned int> DevicePtr_edges(usm_edges+offset_inds[j]);  
         device_ptr<MyUint1> DevicePtr_visited(usm_visited);  
         if (tid < no_of_nodes) {
 
@@ -83,6 +88,7 @@ event parallel_explorer_kernel(queue &q,
                 usm_updating_mask[id]=1;
 
             }
+         }
           }
         }
         
@@ -104,7 +110,7 @@ event parallel_levelgen_kernel(queue &q,
                                  ){
     int no_of_nodes = no_of_nodes_end - no_of_nodes_start;
    // Define the work-group size and the number of work-groups
-    const size_t local_size = 16;  // Number of work-items per work-group
+    const size_t local_size = NUMBER_OF_WORKGROUPS;  // Number of work-items per work-group
     const size_t global_size = ((no_of_nodes + local_size - 1) / local_size) * local_size;
 
     // Setup the range
@@ -142,7 +148,7 @@ event pipegen_kernel(queue &q,
 
           
   
-    const size_t local_size = 16;  // Number of work-items per work-group
+    const size_t local_size = NUMBER_OF_WORKGROUPS;  // Number of work-items per work-group
     const size_t global_size = ((no_of_nodes + local_size - 1) / local_size) * local_size;
 
     // Setup the range
@@ -176,7 +182,7 @@ event maskremove_kernel(queue &q,
                                  ){
                                   
    // Define the work-group size and the number of work-groups
-    const size_t local_size = 16;  // Number of work-items per work-group
+    const size_t local_size = NUMBER_OF_WORKGROUPS;  // Number of work-items per work-group
     const size_t global_size = ((no_of_nodes + local_size - 1) / local_size) * local_size;
 
     // Setup the range
@@ -249,7 +255,7 @@ void run_bfs_fpga(int numCols,
               // << std::endl;
     // }
 
-    // auto Q1 = sycl::queue{devs[1]}; // [opencl:cpu:1] Intel(R) OpenCL, AMD EPYC 7742 64-Core Processor OpenCL 3.0 (Build 0) [2023.16.10.0.17_160000]
+    // auto Q1 = sycl::queue{devs[1]}; // [opencl:cpu:1] Intel(R) OpenCL, AMD EPYC 7742 64-Core Processor OpenCL 3.0 (Build 0) [2023.NUMBER_OF_WORKGROUPS.10.0.17_160000]
     // auto q = sycl::queue{devs[2]}; //  [ext_oneapi_cuda:gpu:0] NVIDIA CUDA BACKEND, NVIDIA A100-SXM4-40GB 8.0 [CUDA 12.2]
 
     // std::cout << "Running on devices: " << std::endl;
@@ -272,6 +278,8 @@ void run_bfs_fpga(int numCols,
     unsigned int *usm_edges = malloc_device<unsigned int>(source_inds.size(), q); 
     unsigned int *usm_pipe = malloc_device<unsigned int>(h_graph_pipe.size(), q); 
     unsigned int *usm_pipe_size = malloc_device<unsigned int>(1, q); 
+    unsigned int *usm_offset = malloc_device<unsigned int>(NUM_COMPUTE_UNITS, q); 
+    unsigned int *usm_offset_inds = malloc_device<unsigned int>(NUM_COMPUTE_UNITS, q); 
  
 
 
@@ -281,6 +289,8 @@ void run_bfs_fpga(int numCols,
     initUSMvec(q,usm_updating_mask,h_updating_graph_mask);
     initUSMvec(q,usm_visited,h_graph_visited);
     initUSMvec(q,usm_pipe,h_graph_pipe);
+    initUSMvec(q,usm_offset,offset);
+    initUSMvec(q,usm_offset_inds,offset_inds);
 
 std::array<event, NUM_COMPUTE_UNITS> eventsExploreRead;
 std::array<double, NUM_COMPUTE_UNITS> execTimesExploreRead;
@@ -317,10 +327,10 @@ std::array<double, NUM_COMPUTE_UNITS> execTimesExploreRead;
     // e_explore_2 = parallel_explorer_kernel<1>(q,h_over,offset[1],offset_inds[1],usm_nodes_start,usm_edges,usm_dist,usm_pipe, usm_updating_mask,usm_visited);
     // e_explore_3 = parallel_explorer_kernel<2>(q,h_over,offset[2],offset_inds[2],usm_nodes_start,usm_edges,usm_dist,usm_pipe, usm_updating_mask,usm_visited);
     // e_explore_4 = parallel_explorer_kernel<3>(q,h_over,offset[3],offset_inds[3],usm_nodes_start,usm_edges,usm_dist,usm_pipe, usm_updating_mask,usm_visited);
-       fpga_tools::UnrolledLoop<NUM_COMPUTE_UNITS>([&](auto krnlID) {
-        eventsExploreRead[krnlID] = parallel_explorer_kernel<krnlID>(
-            q,h_over,offset[krnlID],offset_inds[krnlID],usm_nodes_start,usm_edges,usm_dist,usm_pipe, usm_updating_mask,usm_visited);
-      });
+       
+        e_levelgen_1 = parallel_explorer_kernel<7>(
+            q,h_over,usm_offset,usm_offset_inds,usm_nodes_start,usm_edges,usm_dist,usm_pipe, usm_updating_mask,usm_visited);
+      
     q.wait();
  
 
