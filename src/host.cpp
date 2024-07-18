@@ -141,18 +141,17 @@ std::vector<unsigned int> h_graph_nodes_start;
   std::vector<MyUint1> h_graph_visited(numCols,0); 
 h_graph_visited[start_vertex]=1; 
 
-    std::vector<unsigned int> offset(NUM_COMPUTE_UNITS,0);
-    std::vector<unsigned int> offset_inds_vec(NUM_COMPUTE_UNITS,0);
+
   GraphData fpga_cu_data;
+
+
   int numEdges=0;
   // iterate over num of compute units to generate the graph partition data
   for(int indexPE = 0; indexPE < NUM_COMPUTE_UNITS; indexPE++){
-    int indptr_start = old_buffer_size_indptr[indexPE];
+
     int indptr_end = old_buffer_size_indptr[indexPE+1];
-  int inds_start = old_buffer_size_inds[indexPE];
+
   int inds_end = old_buffer_size_inds[indexPE+1];
-  offset[indexPE] = indptr_start;
-  offset_inds_vec[indexPE] =inds_start;
   // initalize the memory
 
 
@@ -163,18 +162,12 @@ h_graph_visited[start_vertex]=1;
 
     HostGraphDataGenerate(indexPE,start_vertex,fpga_cu_data,source_meta,source_indptr,source_inds,old_buffer_size_meta,old_buffer_size_indptr,old_buffer_size_inds);
   }
+      std::vector<unsigned int> h_graph_pipe(numCols,0);
+    h_graph_pipe[0] = start_vertex;
+  Matrix Graph;
+  Graph.Populate(start_vertex,numCols,numEdges,source_indptr,source_inds,h_dist,h_updating_graph_mask,h_graph_visited,h_graph_pipe);
 
-
-  run_bfs_fpga<8>(numCols,
-                  fpga_cu_data,
-                  source_inds,
-                  source_indptr,
-                  h_updating_graph_mask,
-                  h_graph_visited,
-                  h_dist,
-                  offset,
-                  offset_inds_vec,
-                  start_vertex,numEdges);  
+  run_bfs_fpga(Graph);  
 
 
  
@@ -234,7 +227,7 @@ h_graph_visited[start_vertex]=1;
     int maxLevelCPU = (*it +2);
 
 
-  print_levels(host_level,"cpu",h_dist,"fpga",maxLevelCPU); // CPU Results
+  print_levels(host_level,"cpu",Graph.Distance,"fpga",maxLevelCPU); // CPU Results
 
 
   return 0;

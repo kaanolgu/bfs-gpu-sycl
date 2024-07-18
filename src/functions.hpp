@@ -106,3 +106,33 @@ void initialize(queue &Q,T val, T *arr,int gws,int pos = -1, T pos_val = -1)
                                    }).wait(); 
 
 }
+
+// Convention 
+// CapitalCamelCase - pointer
+
+class Matrix{
+public:
+  unsigned int nodeCount; // number of nodes(vertices)
+  unsigned int edgeCount; // number of edges(connections)
+  unsigned int source; // the begining node
+  std::vector<unsigned int> Offset; // indptr from old convention this stores #totalEdgesforX = rowPointer[x+1] - rowPointer[x]
+  std::vector<unsigned int> Position; // inds from old convention this stores the data we want colIndices[rowPointer[x]] till colIndices[] 
+  std::vector<char> VisitMask; // old h_updating_mask for usm_updating_mask (newly generated visited)
+  std::vector<char> Visit; // old h_visited (old visited data)
+  std::vector<int>  Distance; // h_dist for distances from source
+  std::vector<unsigned int> Frontier; // pipe data
+  void Populate(unsigned int s,unsigned int v, unsigned int e,
+                std::vector<unsigned int>& source_indptr,std::vector<unsigned int>& source_inds,std::vector<int>& h_dist,std::vector<char> &h_updating_graph_mask,std::vector<char> &h_graph_visited,std::vector<unsigned int> &h_graph_pipe){
+    source = s;
+    nodeCount = v;
+    edgeCount = e;
+    Offset = source_indptr;
+    Position = source_inds;
+    VisitMask = h_updating_graph_mask;
+    Visit = h_graph_visited;
+    Distance = h_dist;
+    Frontier = h_graph_pipe;
+
+
+  }
+};
