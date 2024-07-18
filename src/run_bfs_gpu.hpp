@@ -24,7 +24,7 @@ using namespace sycl;
 
 // Forward declare the kernel name in the global scope.
 // This FPGA best practice reduces name mangling in the optimization reports.
-// 
+template <int unroll_factor> class ExploreNeighbours;
 // template <int unroll_factor> class LevelGenerator;
 //-------------------------------------------------------------------
 // Return the execution time of the event, in seconds
@@ -40,6 +40,7 @@ double GetExecutionTime(const event &e) {
 //-- initialize Kernel for Exploring the neighbours of next to visit 
 //-- nodes
 //-------------------------------------------------------------------
+template <int krnl_id>
 event parallel_explorer_kernel(queue &q,
                                 int no_of_nodes,
                                 unsigned int* usm_nodes_start,
@@ -53,12 +54,14 @@ event parallel_explorer_kernel(queue &q,
    // Define the work-group size and the number of work-groups
     const size_t local_size = NUMBER_OF_WORKGROUPS;  // Number of work-items per work-group
     const size_t global_size = ((no_of_nodes + local_size - 1) / local_size) * local_size;
+    // int ncus = q.get_device().get_info<info::device::max_compute_units>();
 
+    // std::cout<< "number of maximumx compute units" << ncus << "\n";
 
     // Setup the range
     nd_range<1> range(global_size, local_size);
 
-        auto e = q.parallel_for<class ExploreNeighbours>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
+        auto e = q.parallel_for<class ExploreNeighbours<krnl_id>>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
         int tid = item.get_global_linear_id();
         int lid = item.get_local_id()[0];
 
@@ -98,13 +101,16 @@ return e;
 }
 
 
+template <int krnl_id>
 event parallel_levelgen_kernel(queue &q,
-                                int no_of_nodes,
+                                int no_of_nodes_start,
+                                int no_of_nodes_end,
                                 int *usm_dist,
                                 MyUint1 *usm_updating_mask,
                                 MyUint1 *usm_visited,
                                 int global_level
                                  ){
+    int no_of_nodes = no_of_nodes_end - no_of_nodes_start;
    // Define the work-group size and the number of work-groups
     const size_t local_size = NUMBER_OF_WORKGROUPS;  // Number of work-items per work-group
     const size_t global_size = ((no_of_nodes + local_size - 1) / local_size) * local_size;
@@ -131,11 +137,11 @@ event parallel_levelgen_kernel(queue &q,
 
 return e;
 }
-
+template <int unroll_factor>
 event pipegen_kernel(queue &q,
                                 int no_of_nodes,
                                 unsigned int *usm_pipe,
-                                unsigned int *d_pipe_size,
+                                unsigned int *d_over,
                                 MyUint1 *usm_updating_mask
                                  ){
                                   
@@ -154,7 +160,7 @@ event pipegen_kernel(queue &q,
           int tid = item.get_global_linear_id();
           sycl::atomic_ref<unsigned int, sycl::memory_order_relaxed,
         sycl::memory_scope_device,sycl::access::address_space::global_space>
-        atomic_op_global(d_pipe_size[0]);
+        atomic_op_global(d_over[0]);
           if (tid < no_of_nodes) {
             
               char condition = usm_updating_mask[tid];
@@ -171,7 +177,7 @@ event pipegen_kernel(queue &q,
 return e;
 }
                                  
-
+template <int unroll_factor>
 event maskremove_kernel(queue &q,
                                 int no_of_nodes,
                                 MyUint1 *usm_updating_mask
@@ -204,12 +210,19 @@ void initUSMvec(queue &Q, T *usm_arr,std::vector<T> &arr){
   Q.memcpy(usm_arr, arr.data(), arr.size() * sizeof(T));
 }
 //----------------------------------------------------------
-//--breadth first search on GPU
+//--breadth first search on FPGA
 //----------------------------------------------------------
 // This function instantiates the vector add kernel, which contains
 // a loop that adds up the two summand arrays and stores the result
 // into sum. This loop will be unrolled by the specified unroll_factor.
-void run_bfs_fpga(Matrix& Graph) noexcept(false) {
+template <int unroll_factor>
+void run_bfs_fpga(int numCols, 
+                  std::vector<unsigned int> &source_inds,
+                  std::vector<unsigned int> &source_indptr,
+                  std::vector<MyUint1> &h_updating_graph_mask,
+                  std::vector<MyUint1> &h_graph_visited,
+                  std::vector<int> &h_dist,
+                  int start_node,int numEdges) noexcept(false) {
  
 
   // Select either:
@@ -253,66 +266,93 @@ void run_bfs_fpga(Matrix& Graph) noexcept(false) {
     // Print out the device information.
     std::cout << "Running on device: "
               << q.get_device().get_info<info::device::name>() << "\n";
+    std::vector<unsigned int> h_graph_pipe(numCols,0);
+    h_graph_pipe[0] = start_node;
+    unsigned int pipe_size=1;
+
+    unsigned int* usm_nodes_start = malloc_device<unsigned int>(source_indptr.size(), q);
+    int *usm_dist = malloc_device<int>(h_dist.size(), q); 
+    MyUint1 *usm_updating_mask = malloc_device<MyUint1>(h_updating_graph_mask.size(), q); 
+    MyUint1 *usm_visited= malloc_device<MyUint1>(h_graph_visited.size(), q); 
+    unsigned int *usm_edges = malloc_device<unsigned int>(source_inds.size(), q); 
+    unsigned int *usm_pipe = malloc_device<unsigned int>(h_graph_pipe.size(), q); 
+    unsigned int *usm_pipe_size = malloc_device<unsigned int>(1, q); 
+    unsigned int *usm_PrefixSum = malloc_device<unsigned int>(h_graph_visited.size(), q); // prefix sum USM
 
 
-    // Device Data
-    int ncus = q.get_device().get_info<info::device::max_compute_units>();
+    initUSMvec(q,usm_edges,source_inds);
+    initUSMvec(q,usm_nodes_start,source_indptr);
+    initUSMvec(q,usm_dist,h_dist);
+    initUSMvec(q,usm_updating_mask,h_updating_graph_mask);
+    initUSMvec(q,usm_visited,h_graph_visited);
+    initUSMvec(q,usm_pipe,h_graph_pipe);
 
-    std::cout<< "number of maximumx compute units" << ncus << "\n";
+std::array<event, NUM_COMPUTE_UNITS> eventsExploreRead;
+std::array<double, NUM_COMPUTE_UNITS> execTimesExploreRead;
 
-    unsigned int  *usm_nodes_start    = malloc_device<unsigned int>(Graph.Offset.size(), q);
-    int           *usm_dist           = malloc_device<int>(Graph.nodeCount, q); 
-    MyUint1       *usm_updating_mask  = malloc_device<MyUint1>(Graph.nodeCount, q); 
-    MyUint1       *usm_visited        = malloc_device<MyUint1>(Graph.nodeCount, q); 
-    unsigned int  *usm_edges          = malloc_device<unsigned int>(Graph.Position.size(), q); 
-    unsigned int  *usm_pipe           = malloc_device<unsigned int>(Graph.nodeCount, q); 
-    unsigned int  *usm_pipe_size      = malloc_device<unsigned int>(1, q); 
-    unsigned int  *usm_PrefixSum      = malloc_device<unsigned int>(Graph.nodeCount, q); // prefix sum USM
-
-
-    initUSMvec(q,usm_edges,Graph.Position);
-    initUSMvec(q,usm_nodes_start,Graph.Offset);
-    initUSMvec(q,usm_dist,Graph.Distance);
-    initUSMvec(q,usm_updating_mask,Graph.VisitMask);
-    initUSMvec(q,usm_visited,Graph.Visit);
-    initUSMvec(q,usm_pipe,Graph.Frontier);
-
-    unsigned int pipe_size = 1;
-    unsigned int *d_pipe_size = malloc_device<unsigned int>(1, q);
+    unsigned int h_over = 1;
+    unsigned int *d_over = malloc_device<unsigned int>(1, q);
 
 
 
     // Compute kernel execution time
-    event e_explore_1,e_explore_2,e_explore_3,LevelEvent,ExploreEvent,e_explore_4;
-    event PipeEvent,ResetEvent,e_remove_2,e_remove_3;
+    event e_explore_1,e_explore_2,e_explore_3,e_levelgen_0,ExploreEvent,e_explore_4;
+    event e_pipegen,e_maskreset,e_remove_2,e_remove_3;
     double time_kernel=0,time_kernel1=0,time_kernel2=0,time_kernel3=0,time_kernel_levelgen=0,time_kernel_levelgen_1=0,time_kernel_pipegen=0,time_kernel_maskreset=0;
-    int global_level = 1;    
+
+  
+
+
+    int global_level = 1;
+
     
     for(int ijk=0; ijk < 100; ijk++){
-        if(pipe_size == 0){
-          std::cout << "total number of iterations" << ijk << "\n";
-          break;
-        }    
-        int zero = 0;
-        q.memcpy(d_pipe_size, &zero, sizeof(unsigned int)).wait();
-        ExploreEvent = parallel_explorer_kernel(q,pipe_size,usm_nodes_start,usm_edges,usm_dist,usm_pipe, usm_updating_mask,usm_visited);
-        q.wait();
-        LevelEvent  = parallel_levelgen_kernel(q,numCols,usm_dist,usm_updating_mask,usm_visited,global_level);
-        PipeEvent   = pipegen_kernel(q,numCols,usm_pipe, d_pipe_size,usm_updating_mask);
-        q.wait();
-        ResetEvent =maskremove_kernel(q,numCols,usm_updating_mask);
-        q.wait();
-
-        // get new pipe size
-        q.memcpy(&pipe_size, d_pipe_size, sizeof(unsigned int)).wait();
- 
-      
-        time_kernel_levelgen += GetExecutionTime(LevelEvent);
-        time_kernel_levelgen_1 += GetExecutionTime(ExploreEvent);
-        time_kernel_pipegen += GetExecutionTime(PipeEvent);
-        time_kernel_maskreset += GetExecutionTime(ResetEvent);
+      // std::cout << h_over << " -- \n";
+     if(h_over == 0){
+      std::cout << "total number of iterations" << ijk << "\n";
+      break;
+     }    
+    int zero = 0;
+    q.memcpy(d_over, &zero, sizeof(unsigned int)).wait();
         
-        global_level++;
+        ExploreEvent = parallel_explorer_kernel<7>(q,h_over,usm_nodes_start,usm_edges,usm_dist,usm_pipe, usm_updating_mask,usm_visited);
+      
+    q.wait();
+ 
+
+    e_levelgen_0 =parallel_levelgen_kernel<0>(q,0,numCols,usm_dist,usm_updating_mask,usm_visited,global_level);
+    // e_levelgen_1 =parallel_levelgen_kernel<1>(q,numCols/2,numCols,usm_dist,usm_updating_mask,usm_visited,global_level);
+
+// q.wait();
+    e_pipegen =pipegen_kernel<8>(q,numCols,usm_pipe, d_over,usm_updating_mask);
+    q.wait();
+
+
+    e_maskreset =maskremove_kernel<8>(q,numCols,usm_updating_mask);
+ 
+// #############################################################################################              
+
+
+        
+         
+
+    q.wait();
+    q.memcpy(&h_over, d_over, sizeof(unsigned int)).wait();
+    // h_over++;
+ 
+//  fpga_tools::UnrolledLoop<NUM_COMPUTE_UNITS>([&](auto krnlID) {
+//         execTimesExploreRead[krnlID] += GetExecutionTime(eventsExploreRead[krnlID]);
+//  });
+    // time_kernel  += GetExecutionTime(e_explore_1);
+    // time_kernel1 += GetExecutionTime(e_explore_2);
+    // time_kernel2 += GetExecutionTime(e_explore_3);
+    // time_kernel3 += GetExecutionTime(e_explore_4);
+    // time_kernel_levelgen += GetExecutionTime(e_levelgen_0);
+    // time_kernel_levelgen_1 += GetExecutionTime(ExploreEvent);
+// time_kernel_pipegen += GetExecutionTime(e_pipegen);
+// time_kernel_maskreset += GetExecutionTime(e_maskreset);
+    global_level++;
+
     }
 
 
@@ -320,7 +360,7 @@ void run_bfs_fpga(Matrix& Graph) noexcept(false) {
 
 
     // copy usm_visited back to hostArray
-    q.memcpy(&Graph.Distance[0], usm_dist, Graph.nodeCount * sizeof(int));
+    q.memcpy(&h_dist[0], usm_dist, h_dist.size() * sizeof(int));
 
     q.wait();
     // sycl::free(usm_nodes_start, q);
@@ -341,7 +381,7 @@ void run_bfs_fpga(Matrix& Graph) noexcept(false) {
          "| # Vertices = %d   | # Edges = %d        |\n"
          "|-------------------------+-------------------------|\n"
          "| Kernel                  |    Wall-Clock Time (ns) |\n"
-         "|-------------------------+-------------------------|\n",Graph.nodeCount,Graph.edgeCount);
+         "|-------------------------+-------------------------|\n",numCols,numEdges);
 
   // double fpga_execution_time = (max(max(time_kernel,time_kernel1),max(time_kernel2,time_kernel3)) + max(time_kernel_pipegen,max(time_kernel_levelgen,time_kernel_levelgen_1)) +  time_kernel_maskreset);
 //  fpga_tools::UnrolledLoop<NUM_COMPUTE_UNITS>([&](auto krnlID) {
