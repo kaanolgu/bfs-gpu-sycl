@@ -28,84 +28,22 @@ constexpr int log2(int num) {
 constexpr int BUFFER_SIZE = 16;
 using MyUint1 = char; 
 using d_type3 = char;
+using Uint32 = unsigned int;
 
 
-#define DEBUG(x) std::cout <<" : "<< x << std::endl;
-//Structure to hold a node information
-struct ComputeUnit
-{
-  
-  MyUint1 *usm_mask;
+class Timer {
+public:
+  Timer() : start_(std::chrono::steady_clock::now()) {}
 
+  double Elapsed() {
+    auto now = std::chrono::steady_clock::now();
+    return std::chrono::duration_cast<Duration>(now - start_).count();
+  }
 
+private:
+  using Duration = std::chrono::duration<double>;
+  std::chrono::steady_clock::time_point start_;
 };
-//Structure to hold a node information
-struct HostGraphData
-{
-  
-  // std::vector<unsigned int> h_graph_nodes_edges;
-  std::vector<MyUint1> h_graph_mask;
-  
-
-
-};
-
-typedef std::array<HostGraphData, MAX_NUM_CU> GraphData;
-
-
-void HostGraphDataGenerate(int indexPE,int start_vertex,GraphData &fpga_cu_data,std::vector<unsigned int>&source_meta,std::vector<unsigned int>&source_indptr,std::vector<unsigned int>&source_inds,std::vector<unsigned int>& old_buffer_size_meta,
-	std::vector<unsigned int>& old_buffer_size_indptr,
-	std::vector<unsigned int>& old_buffer_size_inds) 
-{
-
-  numRows  = source_meta[0 + old_buffer_size_meta[indexPE]];  // this it the value we want! (rows)
-	numNonz  = source_meta[2 + old_buffer_size_meta[indexPE]];  // nonZ count -> total edges
-  // Sanity Check if we loaded the graph properly
-  assert(numRows <= numCols);
-
-  std::cout << std::setw(6) << std::left << "# Graph Information" << "\n Vertices (nodes) = " << numRows << " \n Edges = "<< numNonz << "\n";
-	
-  
-  
-  // allocate host memory
-
-
-  fpga_cu_data[indexPE].h_graph_mask.resize(numCols);
-
- // initialise all the values to 0
-  std::fill(fpga_cu_data[indexPE].h_graph_mask.begin(), fpga_cu_data[indexPE].h_graph_mask.end(), 0);  
-
-
-
-
-
-
-
-    
-
-   fpga_cu_data[indexPE].h_graph_mask[start_vertex]=1; 
-
-}
-
-
-// initialize device arr with val, if needed set arr[pos] = pos_val
-template <typename T>
-void initialize(queue &Q,T val, T *arr,int gws,int pos = -1, T pos_val = -1)
-
-{
-
-
-    Q.parallel_for(gws, [=](id<1> i) [[intel::kernel_args_restrict]] {
-                                  
-                                      arr[i] = val;
-    
-                                      if (i == pos)
-                                      {
-                                          arr[pos] = pos_val;
-                                      }
-                                   }).wait(); 
-
-}
 
 // Convention 
 // CapitalCamelCase - pointer
@@ -135,3 +73,4 @@ void initialize(queue &Q,T val, T *arr,int gws,int pos = -1, T pos_val = -1)
 
 //   }
 // };
+

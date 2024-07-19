@@ -1,19 +1,15 @@
 const char* datasetName;
 #define SIZE_ONE 1
 
-std::vector<unsigned int > source_meta(SIZE_ONE);
-std::vector<unsigned int > source_indptr(SIZE_ONE);
-std::vector<unsigned int > source_inds(SIZE_ONE);
+std::vector<Uint32 > source_meta(SIZE_ONE);
+std::vector<Uint32 > source_indptr(SIZE_ONE);
+std::vector<Uint32 > source_inds(SIZE_ONE);
 
-
-std::vector<unsigned int > source_meta_cpu(SIZE_ONE);
-std::vector<unsigned int > source_indptr_cpu(SIZE_ONE);
-std::vector<unsigned int > source_inds_cpu(SIZE_ONE);
 
 size_t result;
 
-unsigned int getFileSize(const char *fileName) {
-	  unsigned int fil_size;
+Uint32 getFileSize(const char *fileName) {
+	  Uint32 fil_size;
 	  FILE * pFile;
 	  pFile = fopen ( fileName , "r" );
 	  if(pFile == NULL){
@@ -30,7 +26,7 @@ unsigned int getFileSize(const char *fileName) {
 	return fil_size;
 }
 
-void readIntoBuffer(const char * fileName,std::vector<unsigned int >&buffer, unsigned int bufsize,std::vector<unsigned int> &old_buffer_size,unsigned int &offset,int index) {
+void readIntoBuffer(const char * fileName,std::vector<Uint32 >&buffer, Uint32 bufsize,std::vector<Uint32> &old_buffer_size,Uint32 &offset,int index) {
 	  FILE * pFile;
 	  pFile = fopen ( fileName , "r" );
 	  fseek( pFile , 0 , SEEK_SET );
@@ -48,9 +44,9 @@ void readIntoBuffer(const char * fileName,std::vector<unsigned int >&buffer, uns
 
 }
 
-void readFromMM(const char * fileName,std::vector<unsigned int >&buffer,std::vector<unsigned int> &old_buffer_size,unsigned int &offset,int index) {
+void readFromMM(const char * fileName,std::vector<Uint32 >&buffer,std::vector<Uint32> &old_buffer_size,Uint32 &offset,int index) {
 	std::cout << "Reading " << fileName << "..." ;
-	unsigned int fileSize = getFileSize(fileName);
+	Uint32 fileSize = getFileSize(fileName);
 	// std::cout << "fileSize : " << fileSize << std::endl;
 	// define glob_buffer_size to keep track of the last file size written to the buffer in order to make sure we continue where we left off
 	buffer.resize(fileSize + old_buffer_size[index]);
@@ -59,9 +55,9 @@ void readFromMM(const char * fileName,std::vector<unsigned int >&buffer,std::vec
 }
 
 
-void loadMatrix(unsigned int partitionCount,	std::vector<unsigned int>& old_buffer_size_meta,
-	std::vector<unsigned int>& old_buffer_size_indptr,
-	std::vector<unsigned int>& old_buffer_size_inds,unsigned int &offset_meta,unsigned int &offset_indptr,unsigned int &offset_inds) {
+void loadMatrix(Uint32 partitionCount,	std::vector<Uint32>& old_buffer_size_meta,
+	std::vector<Uint32>& old_buffer_size_indptr,
+	std::vector<Uint32>& old_buffer_size_inds,Uint32 &offset_meta,Uint32 &offset_indptr,Uint32 &offset_inds) {
 	// datasetName = rmat-20-32
 	std::cout << "Loading matrix " << datasetName << " with " << partitionCount << " partitions.." << std::endl;  
 	std::string pth = "/dataset/";
@@ -72,7 +68,7 @@ void loadMatrix(unsigned int partitionCount,	std::vector<unsigned int>& old_buff
 	non_switch += temp + "-csc-" + std::to_string(partitionCount) + "/" + temp + "-csc-";
 
 
-	unsigned int zeroz = 0;
+	Uint32 zeroz = 0;
 	for(int i = 0; i < partitionCount; i++){
 		std::string str_meta =non_switch +std::to_string(i)+ "-meta.bin";
 		std::string str_indptr = non_switch +std::to_string(i) +"-indptr.bin";
@@ -95,39 +91,4 @@ void loadMatrix(unsigned int partitionCount,	std::vector<unsigned int>& old_buff
 
 
 }
-void loadMatrixCPU(unsigned int partitionCount,	std::vector<unsigned int>& old_buffer_size_meta,
-	std::vector<unsigned int>& old_buffer_size_indptr,
-	std::vector<unsigned int>& old_buffer_size_inds,unsigned int &offset_meta,unsigned int &offset_indptr,unsigned int &offset_inds) {
-	// datasetName = rmat-20-32
-	std::cout << "Loading matrix " << datasetName << " with " << partitionCount << " partitions.." << std::endl;  
-	std::string pth = "/dataset/";
-	std::string non_switch = getenv("PWD") + pth;
-	std::string temp = datasetName;
 
-	
-	non_switch += temp + "-csc-" + std::to_string(partitionCount) + "/" + temp + "-csc-";
-	
-	
-	unsigned int zeroz = 0;
-	for(int i = 0; i < partitionCount; i++){
-		std::string str_meta =non_switch +std::to_string(i)+ "-meta.bin";
-		std::string str_indptr = non_switch +std::to_string(i) +"-indptr.bin";
-		std::string str_inds = non_switch +std::to_string(i)+ "-inds.bin";
-		
-  		readFromMM(str_meta.c_str(), source_meta_cpu,old_buffer_size_meta,offset_meta,i);
-		readFromMM(str_indptr.c_str(), source_indptr_cpu,old_buffer_size_indptr,offset_indptr,i);
-		readFromMM(str_inds.c_str(), source_inds_cpu,old_buffer_size_inds,offset_inds,i);
-		
-	}
-
-  // cache the loaded matrix details to reuse later
-
-
-
-
-
-//  for(int i =old_buffer_siznds[partitionCount-1]/4-5 ; i < old_buffer_size_inds[partitionCount-1]/4+30; i++)
-//          std::cout << "\nsource_inds[" << i << "] : " << std::setw(10) << std::left << source_inds[i];
-
-
-}
