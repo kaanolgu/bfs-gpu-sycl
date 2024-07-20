@@ -63,7 +63,9 @@ event parallel_explorer_kernel(queue &q,
     // Allocate USM shared memory
     Uint32 *degrees = malloc_device<Uint32>(local, q);
     Uint32 *sedges = malloc_device<Uint32>(local, q);
-
+    Uint32 *vertices = malloc_device<Uint32>(local, q);
+    Uint32 *block_offsets = malloc_device<Uint32>(1, q);
+    Uint32 *offset = malloc_device<Uint32>(1, q);
 
 
     // Setup the range
@@ -71,7 +73,7 @@ event parallel_explorer_kernel(queue &q,
 
         auto e = q.parallel_for<class ExploreNeighbours>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
          const int globalIdx     = item.get_global_id(0);    // global id
-         const int threadIdx     = item.get_local_id(0); // threadIdx.x
+         const int localIdx     = item.get_local_id(0); // threadIdx.x
          const int blockIdx    = item.get_group(0); 
          const int gridDim   = item.get_group_range(0); // gridDim.x
          const int blockDim = item.get_local_range(0); // blockDim.x
@@ -81,12 +83,26 @@ event parallel_explorer_kernel(queue &q,
         device_ptr<Uint32> DevicePtr_edges(Edges); 
         device_ptr<MyUint1> DevicePtr_visited(Visit);  
         if (globalIdx < V) {
+   
+          // Process the current node in tiles
+          unsigned int v = Frontier[globalIdx];
+          vertices[localIdx] = v;      
+          sedges[localIdx] = DevicePtr_start[v];
+          int th_deg = DevicePtr_end[v] - DevicePtr_start[v];
+          degrees[localIdx] = th_deg;
+          item.barrier(sycl::access::fence_space::local_space);
 
-          // Read from the pipe
-          Uint32 idx = Frontier[globalIdx];    
-          // Process the current node in tiles      
-          Uint32 nodesStart = DevicePtr_start[idx];
-          Uint32 nodesEnd = DevicePtr_end[idx];
+                for (int j = 0; j < degrees[localIdx]; j++) {
+                  int iterator =  sedges[localIdx] + j;
+            int id = DevicePtr_edges[iterator];
+            MyUint1 visited_condition = DevicePtr_visited[id];
+            if (!visited_condition) {
+                VisitMask[id]=1;
+
+            }
+         }
+          // Uint32 nodesStart = ;
+          // Uint32 nodesEnd = DevicePtr_end[idx];
             // Step 1:  Iterate through pipe(frontier) to retrieve number of
             //          neighbours for each node in the pipe. We defined a new
             //          usm_num_of_neighbours which is 
@@ -98,41 +114,98 @@ event parallel_explorer_kernel(queue &q,
           //  SYCL equivalent: 
           //  partial_sum = dpct::group::exclusive_scan(item_ct1, in_the_money, 0, sycl::plus<>(), total_sum);
           // 
-          int th_deg = Offset[globalIdx+1] - Offset[globalIdx];
+          
           int aggregate_degree_per_block=0;
-          th_deg = dpct::group::exclusive_scan(item, th_deg, 0, sycl::plus<>(), aggregate_degree_per_block);
+          Uint32 th_deg_new = 0;
+          th_deg_new = dpct::group::exclusive_scan(item, th_deg, 0, sycl::plus<>(), aggregate_degree_per_block);
           item.barrier(sycl::access::fence_space::local_space);
 
            // Store back to shared memory (to later use in the binary search).
-          degrees[threadIdx] = th_deg;
-          auto length = globalIdx - threadIdx + blockDim;
+          degrees[localIdx] = th_deg_new;
 
-          length -= globalIdx - threadIdx;
+        //         for (int j = 0; j < degrees[localIdx]; j++) {
+        //           int iterator =  sedges[localIdx] + j - degrees[localIdx];
+        //     int id = DevicePtr_edges[iterator];
+        //     MyUint1 visited_condition = DevicePtr_visited[id];
+        //     if (!visited_condition) {
+        //         VisitMask[id]=1;
 
-  for (unsigned int i = threadIdx;            // threadIdx.x
-       i < aggregate_degree_per_block;  // total degree to process
-       i += blockDim     // increment by blockDim.x
-  ) {
-// length -= globalIdx - threadIdx;
-  }
+        //     }
+        //  }
+
+        }
+
+
+
+//           if(localIdx == 0){
+//             sycl::atomic_ref<Uint32, sycl::memory_order::relaxed, 
+//                                      sycl::memory_scope::device, 
+//                                      sycl::access::address_space::global_space> atomic_ref(block_offsets[0]);
+//                     offset[0] = atomic_ref.fetch_add(aggregate_degree_per_block);
+//           }
+//           item.barrier(sycl::access::fence_space::local_space);
+
+
+//           auto length = globalIdx - localIdx + blockDim;
+
+//           length -= globalIdx - localIdx;
+
+//   for (unsigned int i = localIdx;            // threadIdx.x
+//        i < aggregate_degree_per_block;  // total degree to process
+//        i += blockDim     // increment by blockDim.x
+//   ) {
+//   /// 4. Compute. Using binary search, find the source vertex each thread is
+//   /// processing, and the corresponding edge, neighbor and weight tuple. Passed
+//   /// to the user-defined lambda operator to process. If there's an output, the
+//   /// resultant neighbor or invalid vertex is written to the output frontier.
+//     // Implement a simple upper_bound algorithm for use in SYCL
+//     // for(int k =0; k < local; k++){
+//     // int left = 0;
+//     // int right = length;
+
+//     // while (left < right) {
+//     //     int mid = left + (right - left) / 2;
+//     //     if (degrees[mid] <= i) {
+//     //         left = mid + 1;
+//     //     } else {
+//     //         right = mid;
+//     //     }
+//     // }
+//     // }
+//      auto it = std::upper_bound(degrees, degrees + length, i);
+//       int id = std::distance(degrees, it) - 1;
+//     // unsigned int id = left - 1; // Return the distance minus 1
+    
+//     // Read from the frontier
+//     Uint32 vv = vertices[id];              // source
+//     auto e = sedges[id] + i - degrees[id]; // edge
+//     auto n = DevicePtr_edges[e];           // neighbour
+//       // if (!Visit[n]) {
+//       //  VisitMask[n]=1;
+//       // }
+// }
+
+
+
+//   }
 
 
 
 
           // Process the edges of the current nodes
-         for (int j = nodesStart; j < nodesEnd; j++) {
-            int id = DevicePtr_edges[j];
-            MyUint1 visited_condition = DevicePtr_visited[id];
-            if (!visited_condition) {
-                VisitMask[id]=1;
+        //  for (int j = nodesStart; j < nodesEnd; j++) {
+            // int id = DevicePtr_edges[j];
+            // MyUint1 visited_condition = DevicePtr_visited[id];
+            // if (!visited_condition) {
+                // VisitMask[id]=1;
 
-            }
-         }
-          }
+            // }
+        //  }
+          //  }
         
         
     });
-        
+    
 
 return e;
 }
