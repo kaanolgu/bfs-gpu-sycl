@@ -8,9 +8,9 @@ using namespace sycl;
 #include "functions.hpp"
 
 // Intel Compatibility Tool (aka c2s)
-#include <dpct/dpct.hpp>
-#include <dpct/rng_utils.hpp>
-#include <dpct/dpl_utils.hpp>
+// #include <dpct/dpct.hpp>
+// #include <dpct/rng_utils.hpp>
+// #include <dpct/dpl_utils.hpp>
 #include <sycl/sycl.hpp>
 // This function returns a vector of two (not necessarily distinct) devices,
 // allowing computation to be split across said devices.
@@ -39,11 +39,15 @@ double GetExecutionTime(const event &e) {
   return kernel_time;
 }
 
+
+
+
+
 //-------------------------------------------------------------------
 //-- initialize Kernel for Exploring the neighbours of next to visit 
 //-- nodes
 //-------------------------------------------------------------------
-
+template<int ITEMS_PER_THREAD>
 event parallel_explorer_kernel(queue &q,
                                 int V, // number of vertices
                                 Uint32* Offset,
@@ -68,15 +72,45 @@ event parallel_explorer_kernel(queue &q,
     Uint32 *offset = malloc_device<Uint32>(1, q);
 
 
+
+// |  Memory Model Equivalence
+// |  CUDA                 SYCL
+// +------------------------------------+
+// |  register        = private memory  |
+// |  shared memory   = local memory    |
+// |  constant memory = constant memory |
+// |  global memory   = global memory   |
+// |  local memory    = N/A             |
+// +------------------------------------+
+
+
+// |  Execution Model Equivalence
+// |  CUDA          SYCL
+// +------------------------+
+// |  SM        = CU        |
+// |  SM core   = PE        |
+// |  thread    = work-item |
+// |  block     = work-group|
+// +------------------------+
+
+
+
+
+
+
     // Setup the range
     nd_range<1> range(global, local);
 
         auto e = q.parallel_for<class ExploreNeighbours>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
-         const int globalIdx     = item.get_global_id(0);    // global id
-         const int localIdx     = item.get_local_id(0); // threadIdx.x
-         const int blockIdx    = item.get_group(0); 
-         const int gridDim   = item.get_group_range(0); // gridDim.x
-         const int blockDim = item.get_local_range(0); // blockDim.x
+          const int globalIdx     = item.get_global_id(0);    // global id
+          const int localIdx     = item.get_local_id(0); // threadIdx.x
+          const int blockIdx    = item.get_group(0); 
+          const int gridDim   = item.get_group_range(0); // gridDim.x
+          const int blockDim = item.get_local_range(0); // blockDim.x
+          Uint32 th_deg[ITEMS_PER_THREAD]; // this variable is shared between workitems
+        // this variable will be instantiated for each work-item separately
+
+
 
         device_ptr<Uint32> DevicePtr_start(Offset);  
         device_ptr<Uint32> DevicePtr_end(Offset + 1);  
@@ -88,21 +122,20 @@ event parallel_explorer_kernel(queue &q,
           unsigned int v = Frontier[globalIdx];
           vertices[localIdx] = v;      
           sedges[localIdx] = DevicePtr_start[v];
-          int th_deg = DevicePtr_end[v] - DevicePtr_start[v];
-          degrees[localIdx] = th_deg;
+          th_deg[0] = DevicePtr_end[v] - DevicePtr_start[v];
+          // degrees[localIdx] = th_deg;
           item.barrier(sycl::access::fence_space::local_space);
+        // DEBUG
+        // ––––––––
+        //  for(int j = 0; j < degrees[localIdx]; j++) {
+        //     int iterator =  sedges[localIdx] + j;
+        //     int id = DevicePtr_edges[iterator];
+        //     MyUint1 visited_condition = DevicePtr_visited[id];
+        //     if (!visited_condition) {
+        //         VisitMask[id]=1;
+        //     }
+        //  }
 
-                for (int j = 0; j < degrees[localIdx]; j++) {
-                  int iterator =  sedges[localIdx] + j;
-            int id = DevicePtr_edges[iterator];
-            MyUint1 visited_condition = DevicePtr_visited[id];
-            if (!visited_condition) {
-                VisitMask[id]=1;
-
-            }
-         }
-          // Uint32 nodesStart = ;
-          // Uint32 nodesEnd = DevicePtr_end[idx];
             // Step 1:  Iterate through pipe(frontier) to retrieve number of
             //          neighbours for each node in the pipe. We defined a new
             //          usm_num_of_neighbours which is 
@@ -115,23 +148,23 @@ event parallel_explorer_kernel(queue &q,
           //  partial_sum = dpct::group::exclusive_scan(item_ct1, in_the_money, 0, sycl::plus<>(), total_sum);
           // 
           
-          int aggregate_degree_per_block=0;
-          Uint32 th_deg_new = 0;
-          th_deg_new = dpct::group::exclusive_scan(item, th_deg, 0, sycl::plus<>(), aggregate_degree_per_block);
-          item.barrier(sycl::access::fence_space::local_space);
+          // int aggregate_degree_per_block;
+          // int local_th_deg = th_deg[0];
+          // th_deg = dpct::group::exclusive_scan(item, th_deg, 0, sycl::plus<>(), aggregate_degree_per_block);
+          // item.barrier(sycl::access::fence_space::local_space);
 
            // Store back to shared memory (to later use in the binary search).
-          degrees[localIdx] = th_deg_new;
+          // degrees[localIdx] = th_deg[0];
+          item.barrier(sycl::access::fence_space::local_space);
+                for (int j = 0; j < th_deg[0]; j++) {
+                  int iterator =  sedges[localIdx] + j - degrees[localIdx];
+            int id = DevicePtr_edges[iterator];
+            MyUint1 visited_condition = DevicePtr_visited[id];
+            if (!visited_condition) {
+                VisitMask[id]=1;
 
-        //         for (int j = 0; j < degrees[localIdx]; j++) {
-        //           int iterator =  sedges[localIdx] + j - degrees[localIdx];
-        //     int id = DevicePtr_edges[iterator];
-        //     MyUint1 visited_condition = DevicePtr_visited[id];
-        //     if (!visited_condition) {
-        //         VisitMask[id]=1;
-
-        //     }
-        //  }
+            }
+         }
 
         }
 
@@ -205,7 +238,7 @@ event parallel_explorer_kernel(queue &q,
         
         
     });
-    
+        // });
 
 return e;
 }
@@ -415,7 +448,7 @@ void FPGARun(int vertexCount,
         break;
       }    
       q.memcpy(frontierCountDevice, &zero, sizeof(Uint32)).wait();  
-      exploreEvent = parallel_explorer_kernel(q,frontierCountHost[0],OffsetDevice,EdgesDevice,FrontierDevice, VisitMaskDevice,VisitDevice,PrefixSumDevice);
+      exploreEvent = parallel_explorer_kernel<1>(q,frontierCountHost[0],OffsetDevice,EdgesDevice,FrontierDevice, VisitMaskDevice,VisitDevice,PrefixSumDevice);
       q.wait();
       // Level Generate
       levelEvent =parallel_levelgen_kernel(q,vertexCount,DistanceDevice,VisitMaskDevice,VisitDevice,global_level);
