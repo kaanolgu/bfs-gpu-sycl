@@ -3,7 +3,8 @@ using namespace sycl;
 
 #include <math.h>
 #include <iostream>
-#include <sycl/ext/intel/fpga_extensions.hpp>
+#include <vector>
+// #include <sycl/ext/intel/fpga_extensions.hpp>
 #include <bitset>
 #include "functions.hpp"
 
@@ -107,17 +108,18 @@ event parallel_explorer_kernel(queue &q,
 // +------------------------+
 
 
+int* _aggregate_degree_per_block = malloc_shared<int>(1, q);
+    *_aggregate_degree_per_block = 0;
 
-
-
+int* _th_deg = malloc_shared<int>(1, q);
+    *_th_deg = 0;
 
     // Setup the range
     nd_range<1> range(global, local);
 
         auto e = q.submit([&](handler& h) {
-        // Local memory for exclusive sum, shared within the work-group
-        sycl::local_accessor<int> local_sum(local, h);
-
+          // Local memory for exclusive sum, shared within the work-group
+          sycl::local_accessor<int> local_sum(local, h);
         h.parallel_for<class ExploreNeighbours>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
           const int globalIdx = item.get_global_id(0);    // global id
           const int localIdx  = item.get_local_id(0); // threadIdx.x
@@ -165,39 +167,43 @@ event parallel_explorer_kernel(queue &q,
           //  SYCL equivalent: 
           //  partial_sum = dpct::group::exclusive_scan(item_ct1, in_the_money, 0, sycl::plus<>(), total_sum);
           // 
-          
+                if(globalIdx == 0 && localIdx == 0){
+             *_th_deg= th_deg[0];
+                }
           // int aggregate_degree_per_block;
           // int local_th_deg = th_deg[0];
           // th_deg = dpct::group::exclusive_scan(item, th_deg, 0, sycl::plus<>(), aggregate_degree_per_block);
           // item.barrier(sycl::access::fence_space::local_space);
             int aggregate_degree_per_block;
-           local_sum[localIdx] = th_deg[0];
-            item.barrier(access::fence_space::local_space);
+            local_sum[localIdx] = th_deg[0];
+            // item.barrier(access::fence_space::local_space);
+            group_barrier(item.get_group());
 
             // Perform the scan operation in local memory
-            for (int offset = 1; offset < local; offset *= 2) {
-                int temp = (localIdx >= offset) ? local_sum[localIdx - offset] : 0;
-                item.barrier(access::fence_space::local_space);
-                local_sum[localIdx] += temp;
-                item.barrier(access::fence_space::local_space);
+            for (int d = 1; d < log2((float)local) -1; d++) {
+                Uint32 stride = (1 << d);
+                int update = (localIdx >= stride) ? local_sum[localIdx - stride] : 0;
+                group_barrier(item.get_group());
+                local_sum[localIdx] += update;
+                group_barrier(item.get_group());
             }
 
             // Write the exclusive scan result back to the thread-local th_deg
             if (localIdx > 0) {
-                th_deg[0] = local_sum[localIdx - 1];
+                th_deg[0] = local_sum[blockDim - 1];
             } else {
                 th_deg[0] = 0;
             }
 
             // Calculate aggregate degree per block
-            if (localIdx == local - 1) {
-                aggregate_degree_per_block = local_sum[local - 1];
+            if (localIdx == blockDim - 1) {
+                aggregate_degree_per_block = local_sum[localIdx];
             }
-             item.barrier(sycl::access::fence_space::local_space);
+            group_barrier(item.get_group());
 
-
-
-
+            if(globalIdx == 0 && localIdx == 0){
+             *_aggregate_degree_per_block = aggregate_degree_per_block;
+            }
            // Store back to shared memory (to later use in the binary search).
           degrees[localIdx] = th_deg[0];
     
@@ -230,7 +236,6 @@ event parallel_explorer_kernel(queue &q,
           length= V;
           }
           length -= globalIdx - localIdx;
-
   for (unsigned int i = localIdx;            // threadIdx.x
        i < aggregate_degree_per_block;  // total degree to process
        i += blockDim     // increment by blockDim.x
@@ -258,16 +263,16 @@ event parallel_explorer_kernel(queue &q,
     unsigned int id = it - 1; // Return the distance minus 1
     if (id < length){
     
-    auto v = vertices[id];              // source
+    // auto v = vertices[id];              // source
     // Read from the frontier
-    auto e = sedges[id] + i - degrees[id]; // edge
+    // auto e = sedges[id] + i - degrees[id]; // edge
     
-    auto n = DevicePtr_edges[e];           // neighbour
+    // auto n = DevicePtr_edges[e];           // neighbour
 // Debug: Print the thread-local th_deg for verification
             // printf("i: %d, it = %d, id = %d, e = %d\n", i, it,id,e);
-      if (!Visit[n]) {
-       VisitMask[n]=1;
-      }
+      // if (!Visit[n]) {
+      //  VisitMask[n]=1;
+      // }
     }
 }
 
@@ -292,7 +297,11 @@ event parallel_explorer_kernel(queue &q,
         
     });
         });
-
+q.wait();
+// Output the aggregate degree per block
+    std::cout << "Aggregate degree per block: " << *_aggregate_degree_per_block << std::endl;
+    std::cout << "th_deg: " << *_th_deg << std::endl;
+    
 return e;
 }
 
