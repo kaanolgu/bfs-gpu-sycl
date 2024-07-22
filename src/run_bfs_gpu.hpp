@@ -100,7 +100,7 @@ event parallel_explorer_kernel(queue &q,
                                 Uint32 *Distance,
                                 Uint32 *PrefixSum)
     {
-    
+
    // Define the work-group size and the number of work-groups
     const size_t local = NUMBER_OF_WORKGROUPS;  // Number of work-items per work-group
     const size_t global = ((N + local - 1) / local) * local;
@@ -201,19 +201,15 @@ int* _th_deg = malloc_shared<int>(1, q);
         device_ptr<Uint32> DevicePtr_end(Offset + 1);  
         device_ptr<Uint32> DevicePtr_edges(Edges); 
         // device_ptr<MyUint1> DevicePtr_visited(Visit);  
-        if (globalIdx < N) {
-            unsigned int node;
+
+          
             /// 1. Load input data to shared/register memory.
-            if(globalIdx < V){
-          node = Frontier[globalIdx];
-          vertices[localIdx] = node;      
-          sedges[localIdx] = DevicePtr_start[node];
-          th_deg[0] = DevicePtr_end[node] - DevicePtr_start[node];
- 
-            }else{
-              node = 0;
-              th_deg[0] = 0;
-            }
+           auto iter_with_valid_check = (globalIdx < V) ? globalIdx : 0;
+          unsigned int node = Frontier[iter_with_valid_check];
+          vertices[localIdx] = (globalIdx < V) ? node : vertices[localIdx];      
+          sedges[localIdx] = (globalIdx < V) ? DevicePtr_start[node] : sedges[localIdx];
+          th_deg[0] = (globalIdx < V) ? (DevicePtr_end[node] - DevicePtr_start[node]) : 0;
+            
 
             
          item.barrier(sycl::access::fence_space::local_space);
@@ -248,7 +244,8 @@ int* _th_deg = malloc_shared<int>(1, q);
           // int local_th_deg = th_deg[0];
           // th_deg = dpct::group::exclusive_scan(item, th_deg, 0, sycl::plus<>(), aggregate_degree_per_block);
           // item.barrier(sycl::access::fence_space::local_space);
-            int aggregate_degree_per_block;
+            int aggregate_degree_per_block = 0;
+            
             aggregate_degree_per_block = th_deg[0];
             local_sum[localIdx] = th_deg[0];
             // item.barrier(access::fence_space::local_space);
@@ -306,21 +303,22 @@ int* _th_deg = malloc_shared<int>(1, q);
           item.barrier(sycl::access::fence_space::local_space);
 
 
-          auto length = globalIdx - localIdx + blockDim;
+          Uint32 length;
           if(V < length){
           length= V;
+          }else{
+           length = blockDim;
           }
-          length -= globalIdx - localIdx;
+          // length -= globalIdx - localIdx;
           sycl::atomic_ref<Uint32, sycl::memory_order_relaxed,
           sycl::memory_scope_device,sycl::access::address_space::global_space>
           atomic_op_global(frontierCount[0]);
-          
+
   for (unsigned int i = localIdx;            // threadIdx.x
        i < aggregate_degree_per_block;  // total degree to process
        i += blockDim    // increment by blockDim.x
   ) {
 
-    printf("i : %d\n",i);
   /// 4. Compute. Using binary search, find the source vertex each thread is
   /// processing, and the corresponding edge, neighbor and weight tuple. Passed
   /// to the user-defined lambda operator to process. If there's an output, the
@@ -348,21 +346,18 @@ int* _th_deg = malloc_shared<int>(1, q);
     // Read from the frontier
     auto e = sedges[id] + i - degrees[id]; // edge
     auto n  = DevicePtr_edges[e];           // neighbour
-group_barrier(item.get_group());
     bool cond = search(v,n,e);
 // Debug: Print the thread-local th_deg for verification
             // printf("i: %d, it = %d, id = %d, v = %d, e = %d, n = %d, offset[0] = %lu\n", i, it,id,v,e,n,OOffset[0]);
-            item.barrier(sycl::access::fence_space::local_space);
       if (cond) {
       Frontier[atomic_op_global.fetch_add(1)] = n;
       }
-    group_barrier(item.get_group());
     }
 }
 
 
 
-  }
+  
 
 
 
