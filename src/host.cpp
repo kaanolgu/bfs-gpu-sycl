@@ -29,8 +29,8 @@ Uint32 matrixID;
 //-------------------------------------------------------------------
 //--initialize array with maximum limit
 //-------------------------------------------------------------------
-template<typename datatype>
-void print_levels(std::vector<datatype> &A,std::string nameA,std::vector<datatype> &B ,std::string nameB,int size){
+template<typename datatypeA,typename datatypeB>
+void print_levels(std::vector<datatypeA> &A,std::string nameA,std::vector<datatypeB> &B ,std::string nameB,int size){
     printf("|---------------------------------------------------|\n");
     printf("|                    VERIFY RESULTS                 |\n");
     printf("|-------------------------+-------------------------|\n");
@@ -83,7 +83,7 @@ int main(int argc, char * argv[])
   ///////////
 
   // allocate mem for the result on host side
-  std::vector<int> h_dist(numCols,-1);
+  std::vector<Uint32> h_dist(numCols,-2);
   h_dist[start_vertex]=0;  
   std::vector<Uint32> h_graph_nodes_start;
   //read the start_vertex node from the file

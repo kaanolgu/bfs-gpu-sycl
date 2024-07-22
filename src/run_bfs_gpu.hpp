@@ -15,7 +15,7 @@ using namespace sycl;
 #include <sycl/sycl.hpp>
 // This function returns a vector of two (not necessarily distinct) devices,
 // allowing computation to be split across said devices.
-#define NUMBER_OF_WORKGROUPS 128
+#define NUMBER_OF_WORKGROUPS 256
 
 // Aliases for LSU Control Extension types
 // Implemented using template arguments such as prefetch & burst_coalesce
@@ -40,7 +40,33 @@ double GetExecutionTime(const event &e) {
   return kernel_time;
 }
 
+// bool search(
+//                       Uint32 const& source,    // ... source
+//                       Uint32 const& neighbor,  // neighbor
+//                       Uint32 const& edge        // edge
+//                       ){
+//       // If the neighbor is not visited, update the distance. Returning false
+//       // here means that the neighbor is not added to the output frontier, and
+//       // instead an invalid vertex is added in its place. These invalides (-1 in
+//       // most cases) can be removed using a filter operator or uniquify.
 
+//       // if (distances[neighbor] != std::numeric_limits<vertex_t>::max())
+//       //   return false;
+//       // else
+//       //   return (math::atomic::cas(
+//       //               &distances[neighbor],
+//       //               std::numeric_limits<vertex_t>::max(), iteration + 1) ==
+//       //               std::numeric_limits<vertex_t>::max());
+
+//       // Simpler logic for the above.
+//       auto old_distance = sycl::atomic_ref<std::int32_t, 
+//                                memory_order::relaxed, 
+//                                memory_scope::device, 
+//                                access::address_space::global_space>(distances[neighbor])
+//                         .fetch_min(iteration + 1);
+
+// return (iteration + 1 < old_distance);
+//     };
 
 template <typename T>
 int upper_bound(T* arr, int length, T value) {
@@ -63,19 +89,59 @@ int upper_bound(T* arr, int length, T value) {
 //-------------------------------------------------------------------
 template<int ITEMS_PER_THREAD>
 event parallel_explorer_kernel(queue &q,
+                                int N,
                                 int V, // number of vertices
+                                Uint32 iteration,
                                 Uint32* Offset,
                                 Uint32 *Edges,
                                 Uint32* Frontier,
+                                Uint32 *frontierCount,
                                 MyUint1 *VisitMask,
-                                MyUint1 *Visit,
+                                Uint32 *Distance,
                                 Uint32 *PrefixSum)
     {
     
    // Define the work-group size and the number of work-groups
     const size_t local = NUMBER_OF_WORKGROUPS;  // Number of work-items per work-group
-    const size_t global = ((V + local - 1) / local) * local;
+    const size_t global = ((N + local - 1) / local) * local;
     // int ncus = q.get_device().get_info<info::device::max_compute_units>();
+
+    auto search = [Distance, iteration](
+                      Uint32 const& source,    // ... source
+                      Uint32 const& neighbor,  // neighbor
+                      Uint32 const& edge        // edge
+                      ) -> bool {
+      // If the neighbor is not visited, update the distance. Returning false
+      // here means that the neighbor is not added to the output frontier, and
+      // instead an invalid vertex is added in its place. These invalides (-1 in
+      // most cases) can be removed using a filter operator or uniquify.
+
+      // if (distances[neighbor] != std::numeric_limits<vertex_t>::max())
+      //   return false;
+      // else
+      //   return (math::atomic::cas(
+      //               &distances[neighbor],
+      //               std::numeric_limits<vertex_t>::max(), iteration + 1) ==
+      //               std::numeric_limits<vertex_t>::max());
+
+      // Simpler logic for the above.
+      // auto old_distance =
+      //     math::atomic::min(&Distance[neighbor], iteration + 1);
+
+      auto old_distance = sycl::atomic_ref<Uint32, 
+                               memory_order::relaxed, 
+                               memory_scope::device, 
+                               access::address_space::global_space>(Distance[neighbor])
+                        .fetch_min(iteration + 1);
+      return (iteration + 1 < old_distance);
+    };
+
+
+
+
+
+
+
 
     // std::cout<< "number of maximumx compute units" << ncus << "\n";
     // Allocate USM shared memory
@@ -108,7 +174,7 @@ event parallel_explorer_kernel(queue &q,
 // +------------------------+
 
 
-int* _aggregate_degree_per_block = malloc_shared<int>(1, q);
+int* _aggregate_degree_per_block = malloc_shared<int>(local, q);
     *_aggregate_degree_per_block = 0;
 
 int* _th_deg = malloc_shared<int>(1, q);
@@ -123,7 +189,7 @@ int* _th_deg = malloc_shared<int>(1, q);
         h.parallel_for<class ExploreNeighbours>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
           const int globalIdx = item.get_global_id(0);    // global id
           const int localIdx  = item.get_local_id(0); // threadIdx.x
-          const int blockIdx  = item.get_group(0); 
+          const int groupIdx  = item.get_group(0); 
           const int gridDim   = item.get_group_range(0); // gridDim.x
           const int blockDim  = item.get_local_range(0); // blockDim.x
           Uint32 th_deg[ITEMS_PER_THREAD]; // this variable is shared between workitems
@@ -134,16 +200,23 @@ int* _th_deg = malloc_shared<int>(1, q);
         device_ptr<Uint32> DevicePtr_start(Offset);  
         device_ptr<Uint32> DevicePtr_end(Offset + 1);  
         device_ptr<Uint32> DevicePtr_edges(Edges); 
-        device_ptr<MyUint1> DevicePtr_visited(Visit);  
-        if (globalIdx < V) {
-   
+        // device_ptr<MyUint1> DevicePtr_visited(Visit);  
+        if (globalIdx < N) {
+            unsigned int node;
             /// 1. Load input data to shared/register memory.
-            unsigned int node = Frontier[globalIdx];
+            if(globalIdx < V){
+          node = Frontier[globalIdx];
           vertices[localIdx] = node;      
           sedges[localIdx] = DevicePtr_start[node];
           th_deg[0] = DevicePtr_end[node] - DevicePtr_start[node];
-          item.barrier(sycl::access::fence_space::local_space);
+ 
+            }else{
+              node = 0;
+              th_deg[0] = 0;
+            }
 
+            
+         item.barrier(sycl::access::fence_space::local_space);
 
         // DEBUG
         // ––––––––
@@ -170,11 +243,13 @@ int* _th_deg = malloc_shared<int>(1, q);
                 if(globalIdx == 0 && localIdx == 0){
              *_th_deg= th_deg[0];
                 }
+
           // int aggregate_degree_per_block;
           // int local_th_deg = th_deg[0];
           // th_deg = dpct::group::exclusive_scan(item, th_deg, 0, sycl::plus<>(), aggregate_degree_per_block);
           // item.barrier(sycl::access::fence_space::local_space);
             int aggregate_degree_per_block;
+            aggregate_degree_per_block = th_deg[0];
             local_sum[localIdx] = th_deg[0];
             // item.barrier(access::fence_space::local_space);
             group_barrier(item.get_group());
@@ -196,14 +271,14 @@ int* _th_deg = malloc_shared<int>(1, q);
             }
 
             // Calculate aggregate degree per block
-            if (localIdx == blockDim - 1) {
+            // if (localIdx == blockDim - 1) {
                 aggregate_degree_per_block = local_sum[localIdx];
-            }
-            group_barrier(item.get_group());
-
-            if(globalIdx == 0 && localIdx == 0){
-             *_aggregate_degree_per_block = aggregate_degree_per_block;
-            }
+            // }
+      
+       
+    
+             *(_aggregate_degree_per_block + groupIdx) = aggregate_degree_per_block;
+    
            // Store back to shared memory (to later use in the binary search).
           degrees[localIdx] = th_deg[0];
     
@@ -221,7 +296,7 @@ int* _th_deg = malloc_shared<int>(1, q);
         // }
 
         /// 3. Compute block offsets if there's an output frontier.
-
+          // group_barrier(item.get_group());
           if(localIdx == 0){
             sycl::atomic_ref<Uint32, sycl::memory_order::relaxed, 
                                      sycl::memory_scope::device, 
@@ -236,10 +311,16 @@ int* _th_deg = malloc_shared<int>(1, q);
           length= V;
           }
           length -= globalIdx - localIdx;
+          sycl::atomic_ref<Uint32, sycl::memory_order_relaxed,
+          sycl::memory_scope_device,sycl::access::address_space::global_space>
+          atomic_op_global(frontierCount[0]);
+          
   for (unsigned int i = localIdx;            // threadIdx.x
        i < aggregate_degree_per_block;  // total degree to process
-       i += blockDim     // increment by blockDim.x
+       i += blockDim    // increment by blockDim.x
   ) {
+
+    printf("i : %d\n",i);
   /// 4. Compute. Using binary search, find the source vertex each thread is
   /// processing, and the corresponding edge, neighbor and weight tuple. Passed
   /// to the user-defined lambda operator to process. If there's an output, the
@@ -263,16 +344,19 @@ int* _th_deg = malloc_shared<int>(1, q);
     unsigned int id = it - 1; // Return the distance minus 1
     if (id < length){
     
-    // auto v = vertices[id];              // source
+    auto v = vertices[id];              // source
     // Read from the frontier
-    // auto e = sedges[id] + i - degrees[id]; // edge
-    
-    // auto n = DevicePtr_edges[e];           // neighbour
+    auto e = sedges[id] + i - degrees[id]; // edge
+    auto n  = DevicePtr_edges[e];           // neighbour
+group_barrier(item.get_group());
+    bool cond = search(v,n,e);
 // Debug: Print the thread-local th_deg for verification
-            // printf("i: %d, it = %d, id = %d, e = %d\n", i, it,id,e);
-      // if (!Visit[n]) {
-      //  VisitMask[n]=1;
-      // }
+            // printf("i: %d, it = %d, id = %d, v = %d, e = %d, n = %d, offset[0] = %lu\n", i, it,id,v,e,n,OOffset[0]);
+            item.barrier(sycl::access::fence_space::local_space);
+      if (cond) {
+      Frontier[atomic_op_global.fetch_add(1)] = n;
+      }
+    group_barrier(item.get_group());
     }
 }
 
@@ -300,7 +384,15 @@ int* _th_deg = malloc_shared<int>(1, q);
 q.wait();
 // Output the aggregate degree per block
     std::cout << "Aggregate degree per block: " << *_aggregate_degree_per_block << std::endl;
+    std::cout << "Aggregate +1 per block: " << *(_aggregate_degree_per_block +1) << std::endl;
+    std::cout << "Aggregate +2 per block: " << *(_aggregate_degree_per_block +2)<< std::endl;
+    std::cout << "Aggregate +3 per block: " << *(_aggregate_degree_per_block +3)<< std::endl;
     std::cout << "th_deg: " << *_th_deg << std::endl;
+    int agg_sum = 0;
+    for(int i = 0; i < local ; i++){
+      agg_sum += *(_aggregate_degree_per_block + i);
+    }
+     std::cout << "Total agg: " <<  agg_sum<< std::endl;
     
 return e;
 }
@@ -309,10 +401,10 @@ return e;
 
 event parallel_levelgen_kernel(queue &q,
                                 int V,
-                                int *Distance,
+                                Uint32 *Distance,
                                 MyUint1 *VisitMask,
                                 MyUint1 *Visit,
-                                int global_level
+                                int iteration
                                  ){
    // Define the work-group size and the number of work-groups
     const size_t local = NUMBER_OF_WORKGROUPS;  // Number of work-items per work-group
@@ -325,8 +417,8 @@ event parallel_levelgen_kernel(queue &q,
           int gid = item.get_global_id();
           if (gid < V) {
             if(VisitMask[gid]){
-              Distance[gid] = global_level;
-              Visit[gid]=1;
+              // Distance[gid] = iteration;
+              // Visit[gid]=1;
            }
           }
 
@@ -420,7 +512,7 @@ void FPGARun(int vertexCount,
                   std::vector<Uint32> &OffsetHost,
                   std::vector<MyUint1> &VisitMaskHost,
                   std::vector<MyUint1> &VisitHost,
-                  std::vector<int> &DistanceHost,
+                  std::vector<Uint32> &DistanceHost,
                   int sourceNode,int edgeCount) noexcept(false) {
  
 
@@ -471,7 +563,7 @@ void FPGARun(int vertexCount,
     Uint32 pipe_size=1;
 
     Uint32* OffsetDevice      = malloc_device<Uint32>(OffsetHost.size(), q);
-    int *DistanceDevice       = malloc_device<int>(DistanceHost.size(), q); 
+    Uint32 *DistanceDevice    = malloc_device<Uint32>(DistanceHost.size(), q); 
     MyUint1 *VisitMaskDevice  = malloc_device<MyUint1>(VisitMaskHost.size(), q); 
     MyUint1 *VisitDevice      = malloc_device<MyUint1>(VisitHost.size(), q); 
     Uint32 *EdgesDevice       = malloc_device<Uint32>(IndexHost.size(), q); 
@@ -501,19 +593,19 @@ void FPGARun(int vertexCount,
 
 
 
-    int global_level = 1;
+    int iteration = 0;
     int zero = 0;
 
-    for(int ijk=0; ijk < 100; ijk++){
+    for(int ijk=0; ijk < 1; ijk++){
       if(frontierCountHost[0] == 0){
         std::cout << "total number of iterations" << ijk << "\n";
         break;
       }    
       q.memcpy(frontierCountDevice, &zero, sizeof(Uint32)).wait();  
-      exploreEvent = parallel_explorer_kernel<1>(q,frontierCountHost[0],OffsetDevice,EdgesDevice,FrontierDevice, VisitMaskDevice,VisitDevice,PrefixSumDevice);
+      exploreEvent = parallel_explorer_kernel<1>(q,vertexCount,frontierCountHost[0],iteration,OffsetDevice,EdgesDevice,FrontierDevice,frontierCountDevice, VisitMaskDevice,DistanceDevice,PrefixSumDevice);
       q.wait();
       // Level Generate
-      levelEvent =parallel_levelgen_kernel(q,vertexCount,DistanceDevice,VisitMaskDevice,VisitDevice,global_level);
+      levelEvent =parallel_levelgen_kernel(q,vertexCount,DistanceDevice,VisitMaskDevice,VisitDevice,iteration);
       pipeEvent =pipegen_kernel(q,vertexCount,FrontierDevice, frontierCountDevice,VisitMaskDevice);
       q.wait();
       resetEvent =maskremove_kernel(q,vertexCount,VisitMaskDevice);             
@@ -525,7 +617,7 @@ void FPGARun(int vertexCount,
       pipeDuration    += GetExecutionTime(pipeEvent);
       resetDuration   += GetExecutionTime(resetEvent);
       // Increase the level by 1 
-      global_level++;
+      iteration++;
     }
 
 
@@ -551,7 +643,7 @@ void FPGARun(int vertexCount,
          "| # Vertices = %d   | # Edges = %d     | #Instances = %d   |\n"
          "|-------------------------+-------------------------|\n"
          "| Kernel                  |    Wall-Clock Time (ns) |\n"
-         "|-------------------------+-------------------------|\n",vertexCount,edgeCount,(global_level-1));
+         "|-------------------------+-------------------------|\n",vertexCount,edgeCount,(iteration-1));
 
   double totalDuration = exploreDuration + max(levelDuration,pipeDuration) +  resetDuration; // in seconds
 
