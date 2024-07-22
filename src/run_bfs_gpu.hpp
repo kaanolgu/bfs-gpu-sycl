@@ -24,8 +24,91 @@ using namespace sycl;
 // using PipelinedLSU = ext::intel::lsu<>;
 // using BurstCoalescedLSU = ext::intel::lsu<ext::intel::burst_coalesce<true>,ext::intel::statically_coalesce<false>>;
 // using CacheLSU = ext::intel::lsu<ext::intel::burst_coalesce<true>, ext::intel::cache<1024*1024>,ext::intel::statically_coalesce<false>>;
+template <typename vertex_t>
+class Limits {
+public:
+    static vertex_t invalid() {
+        return std::numeric_limits<vertex_t>::max();
+    }
 
+    static bool is_valid(vertex_t v) {
+        return v != invalid();
+    }
+};
 
+namespace gunrock {
+
+template <typename type_t, typename enable_t = void>
+struct numeric_limits : std::numeric_limits<type_t> {};
+
+// Numeric Limits (additional support) for invalid() values.
+template <typename type_t>
+struct numeric_limits<
+    type_t,
+    typename std::enable_if_t<std::is_integral<type_t>::value &&
+                              std::is_signed<type_t>::value>>
+    : std::numeric_limits<type_t> {
+  constexpr static type_t invalid() {
+    return std::integral_constant<type_t, -1>::value;
+  }
+};
+
+template <typename type_t>
+struct numeric_limits<
+    type_t,
+    typename std::enable_if_t<std::is_integral<type_t>::value &&
+                              std::is_unsigned<type_t>::value>>
+    : std::numeric_limits<type_t> {
+  constexpr static type_t invalid() {
+    return std::integral_constant<type_t,
+                                  std::numeric_limits<type_t>::max()>::value;
+  }
+};
+
+template <typename type_t>
+struct numeric_limits<
+    type_t,
+    typename std::enable_if_t<std::is_floating_point<type_t>::value>>
+    : std::numeric_limits<type_t> {
+  constexpr static type_t invalid() {
+    return std::numeric_limits<type_t>::quiet_NaN();
+  }
+};
+
+}  // namespace gunrock
+
+namespace gunrock {
+namespace util {
+namespace limits {
+
+template <typename type_t>
+inline bool is_valid(type_t value) {
+  static_assert((std::is_integral<type_t>::value ||
+                 std::is_floating_point<type_t>::value),
+                "type_t must be an arithmetic type.");
+
+  // Trying:
+  // https://stackoverflow.com/questions/61646166/how-to-resolve-fpclassify-ambiguous-call-to-overloaded-function
+  if (std::is_integral<type_t>::value)
+    return (value != gunrock::numeric_limits<type_t>::invalid());
+  else
+    return isnan(static_cast<double>(value)) ? false : true;
+}
+
+}  // namespace limits
+}  // namespace util
+}  // namespace gunrock
+
+// initialize device arr with val, if needed set arr[pos] = pos_val
+template <typename T>
+void copyToDevice(queue &Q, std::vector<T> &arr,T *usm_arr){
+  Q.memcpy(usm_arr, arr.data(), arr.size() * sizeof(T));
+}
+// initialize device arr with val, if needed set arr[pos] = pos_val
+template <typename T>
+void copyToHost(queue &Q, T *usm_arr,std::vector<T> &arr){
+  Q.memcpy(arr.data(),usm_arr, arr.size() * sizeof(T)).wait();
+}
 // Forward declare the kernel name in the global scope.
 // This FPGA best practice reduces name mangling in the optimization reports.
 
@@ -69,7 +152,7 @@ double GetExecutionTime(const event &e) {
 //     };
 
 template <typename T>
-int upper_bound(T* arr, int length, T value) {
+int upper_bound(const sycl::local_accessor<T> &arr, int length, T value) {
     int left = 0;
     int right = length;
     while (left < right) {
@@ -145,9 +228,10 @@ event parallel_explorer_kernel(queue &q,
 
     // std::cout<< "number of maximumx compute units" << ncus << "\n";
     // Allocate USM shared memory
-    Uint32 *degrees = malloc_device<Uint32>(256, q);
-    Uint32 *sedges = malloc_device<Uint32>(256, q);
-    Uint32 *vertices = malloc_device<Uint32>(256, q);
+    // Uint32 *degrees = malloc_device<Uint32>(256, q);
+    // Uint32 *sedges = malloc_device<Uint32>(256, q);
+    // Uint32 *vertices = malloc_device<Uint32>(256, q);
+    // std::vector<Uint32> vertices_a(256,0);
     Uint32 *block_offsets = malloc_device<Uint32>(1, q);
     unsigned long *OOffset = malloc_device<unsigned long>(1, q);
 
@@ -186,38 +270,57 @@ int* _th_deg = malloc_shared<int>(1, q);
         auto e = q.submit([&](handler& h) {
           // Local memory for exclusive sum, shared within the work-group
           sycl::local_accessor<int> local_sum(local, h);
-        h.parallel_for<class ExploreNeighbours>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
-          const int globalIdx = item.get_global_id(0);    // global id
-          const int localIdx  = item.get_local_id(0); // threadIdx.x
+          sycl::local_accessor<Uint32> vertices(local, h);
+          sycl::local_accessor<Uint32> sedges(local, h);
+          sycl::local_accessor<Uint32> degrees(local, h);
+        h.parallel_for<class ExploreNeighbours>(range, [=](nd_item<1> item) {
+          const int gid = item.get_global_id(0);    // global id
+          const int lid  = item.get_local_id(0); // threadIdx.x
           const int groupIdx  = item.get_group(0); 
           const int gridDim   = item.get_group_range(0); // gridDim.x
           const int blockDim  = item.get_local_range(0); // blockDim.x
           Uint32 th_deg[ITEMS_PER_THREAD]; // this variable is shared between workitems
         // this variable will be instantiated for each work-item separately
 
-
+     
 
         device_ptr<Uint32> DevicePtr_start(Offset);  
         device_ptr<Uint32> DevicePtr_end(Offset + 1);  
         device_ptr<Uint32> DevicePtr_edges(Edges); 
         // device_ptr<MyUint1> DevicePtr_visited(Visit);  
 
-          
-            /// 1. Load input data to shared/register memory.
-           auto iter_with_valid_check = (globalIdx < V) ? globalIdx : 0;
-          unsigned int node = Frontier[iter_with_valid_check];
-          vertices[localIdx] = (globalIdx < V) ? node : vertices[localIdx];      
-          sedges[localIdx] = (globalIdx < V) ? DevicePtr_start[node] : sedges[localIdx];
-          th_deg[0] = (globalIdx < V) ? (DevicePtr_end[node] - DevicePtr_start[node]) : 0;
+            if (gid < V) {
+                Uint32 v = Frontier[gid];
+                vertices[lid] = v;
+                
+                if (gunrock::util::limits::is_valid(v)) {
+                    sedges[lid] = DevicePtr_start[v];
+                    th_deg[lid] =DevicePtr_end[v] - DevicePtr_start[v];
+                } else {
+                    th_deg[lid] = 0;
+                }
+            }
+            else {
+                vertices[lid] = gunrock::numeric_limits<Uint32>::invalid();
+                th_deg[lid] = 0;
+            }
+        
+       
+     
             
 
-            
-         item.barrier(sycl::access::fence_space::local_space);
-
+            sycl::group_barrier(item.get_group());
+        //  item.barrier(sycl::access::fence_space::local_space);
+  //  });
+  //       });
+  //       copyToHost(q,vertices,vertices_a);
+  //       for(int i : vertices_a){
+  //         std::cout << i << std::endl;
+  //       }
         // DEBUG
         // ––––––––
-        //  for(int j = 0; j < degrees[localIdx]; j++) {
-        //     int iterator =  sedges[localIdx] + j;
+        //  for(int j = 0; j < degrees[lid]; j++) {
+        //     int iterator =  sedges[lid] + j;
         //     int id = DevicePtr_edges[iterator];
         //     MyUint1 visited_condition = DevicePtr_visited[id];
         //     if (!visited_condition) {
@@ -236,7 +339,7 @@ int* _th_deg = malloc_shared<int>(1, q);
           //  SYCL equivalent: 
           //  partial_sum = dpct::group::exclusive_scan(item_ct1, in_the_money, 0, sycl::plus<>(), total_sum);
           // 
-                if(globalIdx == 0 && localIdx == 0){
+                if(gid == 0 && lid == 0){
              *_th_deg= th_deg[0];
                 }
 
@@ -244,32 +347,32 @@ int* _th_deg = malloc_shared<int>(1, q);
           // int local_th_deg = th_deg[0];
           // th_deg = dpct::group::exclusive_scan(item, th_deg, 0, sycl::plus<>(), aggregate_degree_per_block);
           // item.barrier(sycl::access::fence_space::local_space);
-            int aggregate_degree_per_block = 0;
+            int aggregate_degree_per_block;
             
             aggregate_degree_per_block = th_deg[0];
-            local_sum[localIdx] = th_deg[0];
+            local_sum[lid] = th_deg[0];
             // item.barrier(access::fence_space::local_space);
             group_barrier(item.get_group());
 
             // Perform the scan operation in local memory
             for (int d = 1; d < log2((float)local) -1; d++) {
                 Uint32 stride = (1 << d);
-                int update = (localIdx >= stride) ? local_sum[localIdx - stride] : 0;
+                int update = (lid >= stride) ? local_sum[lid - stride] : 0;
                 group_barrier(item.get_group());
-                local_sum[localIdx] += update;
+                local_sum[lid] += update;
                 group_barrier(item.get_group());
             }
 
             // Write the exclusive scan result back to the thread-local th_deg
-            if (localIdx > 0) {
+            if (lid > 0) {
                 th_deg[0] = local_sum[blockDim - 1];
             } else {
                 th_deg[0] = 0;
             }
 
             // Calculate aggregate degree per block
-            // if (localIdx == blockDim - 1) {
-                aggregate_degree_per_block = local_sum[localIdx];
+            // if (lid == blockDim - 1) {
+                aggregate_degree_per_block = local_sum[lid];
             // }
       
        
@@ -277,11 +380,11 @@ int* _th_deg = malloc_shared<int>(1, q);
              *(_aggregate_degree_per_block + groupIdx) = aggregate_degree_per_block;
     
            // Store back to shared memory (to later use in the binary search).
-          degrees[localIdx] = th_deg[0];
+          degrees[lid] = th_deg[0];
     
          
         //         for (int j = 0; j < th_deg[0]; j++) {
-        //           int iterator =  sedges[localIdx] + j - degrees[localIdx];
+        //           int iterator =  sedges[lid] + j - degrees[lid];
         //     int id = DevicePtr_edges[iterator];
         //     MyUint1 visited_condition = DevicePtr_visited[id];
         //     if (!visited_condition) {
@@ -294,27 +397,23 @@ int* _th_deg = malloc_shared<int>(1, q);
 
         /// 3. Compute block offsets if there's an output frontier.
           // group_barrier(item.get_group());
-          if(localIdx == 0){
+          if(lid == 0){
             sycl::atomic_ref<Uint32, sycl::memory_order::relaxed, 
                                      sycl::memory_scope::device, 
                                      sycl::access::address_space::global_space> atomic_ref(block_offsets[0]);
                     OOffset[0] = atomic_ref.fetch_add(aggregate_degree_per_block);
           }
-          item.barrier(sycl::access::fence_space::local_space);
+          sycl::group_barrier(item.get_group());
 
 
-          Uint32 length;
-          if(V < length){
-          length= V;
-          }else{
-           length = blockDim;
-          }
-          // length -= globalIdx - localIdx;
-          sycl::atomic_ref<Uint32, sycl::memory_order_relaxed,
-          sycl::memory_scope_device,sycl::access::address_space::global_space>
-          atomic_op_global(frontierCount[0]);
+          auto length = gid - lid + blockDim;
+          if (V < length)
+            length = V;
+          length -= gid - lid;
 
-  for (unsigned int i = localIdx;            // threadIdx.x
+      
+
+  for (unsigned int i = lid;            // threadIdx.x
        i < aggregate_degree_per_block;  // total degree to process
        i += blockDim    // increment by blockDim.x
   ) {
@@ -340,38 +439,22 @@ int* _th_deg = malloc_shared<int>(1, q);
      auto it = upper_bound(degrees,length, i);
       // int id = std::distance(degrees, it) - 1;
     unsigned int id = it - 1; // Return the distance minus 1
-    if (id < length){
+    // if (id < length){
     
-    auto v = vertices[id];              // source
+    Uint32 v = vertices[id];              // source
+    if (gunrock::util::limits::is_valid(v)){
     // Read from the frontier
     auto e = sedges[id] + i - degrees[id]; // edge
     auto n  = DevicePtr_edges[e];           // neighbour
-    bool cond = search(v,n,e);
+
+    bool cond =search(v,n,e);
 // Debug: Print the thread-local th_deg for verification
-            // printf("i: %d, it = %d, id = %d, v = %d, e = %d, n = %d, offset[0] = %lu\n", i, it,id,v,e,n,OOffset[0]);
+            printf("i: %d, it = %d, id = %d, v = %d, e = %d, n = %d, offset[0] = %lu\n", i, it,id,v,e,n,OOffset[0]);
       if (cond) {
-      Frontier[atomic_op_global.fetch_add(1)] = n;
+      Frontier[OOffset[0] + i] = n;
       }
     }
 }
-
-
-
-  
-
-
-
-
-          // Process the edges of the current nodes
-        //  for (int j = nodesStart; j < nodesEnd; j++) {
-            // int id = DevicePtr_edges[j];
-            // MyUint1 visited_condition = DevicePtr_visited[id];
-            // if (!visited_condition) {
-                // VisitMask[id]=1;
-
-            // }
-        //  }
-          //  }
         
         
     });
@@ -486,16 +569,7 @@ event maskremove_kernel(queue &q,
 return e;
 }
 
-// initialize device arr with val, if needed set arr[pos] = pos_val
-template <typename T>
-void copyToDevice(queue &Q, std::vector<T> &arr,T *usm_arr){
-  Q.memcpy(usm_arr, arr.data(), arr.size() * sizeof(T));
-}
-// initialize device arr with val, if needed set arr[pos] = pos_val
-template <typename T>
-void copyToHost(queue &Q, T *usm_arr,std::vector<T> &arr){
-  Q.memcpy(arr.data(),usm_arr, arr.size() * sizeof(T)).wait();
-}
+
 //----------------------------------------------------------
 //--breadth first search on FPGA
 //----------------------------------------------------------
