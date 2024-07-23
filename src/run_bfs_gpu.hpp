@@ -36,68 +36,8 @@ public:
     }
 };
 
-namespace gunrock {
 
-template <typename type_t, typename enable_t = void>
-struct numeric_limits : std::numeric_limits<type_t> {};
 
-// Numeric Limits (additional support) for invalid() values.
-template <typename type_t>
-struct numeric_limits<
-    type_t,
-    typename std::enable_if_t<std::is_integral<type_t>::value &&
-                              std::is_signed<type_t>::value>>
-    : std::numeric_limits<type_t> {
-  constexpr static type_t invalid() {
-    return std::integral_constant<type_t, -1>::value;
-  }
-};
-
-template <typename type_t>
-struct numeric_limits<
-    type_t,
-    typename std::enable_if_t<std::is_integral<type_t>::value &&
-                              std::is_unsigned<type_t>::value>>
-    : std::numeric_limits<type_t> {
-  constexpr static type_t invalid() {
-    return std::integral_constant<type_t,
-                                  std::numeric_limits<type_t>::max()>::value;
-  }
-};
-
-template <typename type_t>
-struct numeric_limits<
-    type_t,
-    typename std::enable_if_t<std::is_floating_point<type_t>::value>>
-    : std::numeric_limits<type_t> {
-  constexpr static type_t invalid() {
-    return std::numeric_limits<type_t>::quiet_NaN();
-  }
-};
-
-}  // namespace gunrock
-
-namespace gunrock {
-namespace util {
-namespace limits {
-
-template <typename type_t>
-inline bool is_valid(type_t value) {
-  static_assert((std::is_integral<type_t>::value ||
-                 std::is_floating_point<type_t>::value),
-                "type_t must be an arithmetic type.");
-
-  // Trying:
-  // https://stackoverflow.com/questions/61646166/how-to-resolve-fpclassify-ambiguous-call-to-overloaded-function
-  if (std::is_integral<type_t>::value)
-    return (value != gunrock::numeric_limits<type_t>::invalid());
-  else
-    return isnan(static_cast<double>(value)) ? false : true;
-}
-
-}  // namespace limits
-}  // namespace util
-}  // namespace gunrock
 
 // initialize device arr with val, if needed set arr[pos] = pos_val
 template <typename T>
@@ -152,18 +92,18 @@ double GetExecutionTime(const event &e) {
 //     };
 
 template <typename T>
-int upper_bound(const sycl::local_accessor<T> &arr, int length, T value) {
-    int left = 0;
-    int right = length;
-    while (left < right) {
-        int mid = left + (right - left) / 2;
-        if (value < arr[mid]) {
-            right = mid;
+int upper_bound(const sycl::local_accessor<T> &arr, int n, int value) {
+    int start = 0;
+    int i;
+    while (start < n) {
+        i = start + (n - start) / 2;
+        if (value < arr[i]) {
+            n = i;
         } else {
-            left = mid + 1;
+            start = i + 1;
         }
-    }
-    return left;
+    } // end while
+    return start;
 }
 
 //-------------------------------------------------------------------
@@ -276,7 +216,7 @@ int* _th_deg = malloc_shared<int>(1, q);
         h.parallel_for<class ExploreNeighbours>(range, [=](nd_item<1> item) {
           const int gid = item.get_global_id(0);    // global id
           const int lid  = item.get_local_id(0); // threadIdx.x
-          const int groupIdx  = item.get_group(0); 
+          const int blockIdx  = item.get_group(0); // blockIdx.x
           const int gridDim   = item.get_group_range(0); // gridDim.x
           const int blockDim  = item.get_local_range(0); // blockDim.x
           Uint32 th_deg[ITEMS_PER_THREAD]; // this variable is shared between workitems
@@ -289,23 +229,24 @@ int* _th_deg = malloc_shared<int>(1, q);
         device_ptr<Uint32> DevicePtr_edges(Edges); 
         // device_ptr<MyUint1> DevicePtr_visited(Visit);  
 
-            if (gid < V) {
-                Uint32 v = Frontier[gid];
+            if (blockDim * blockIdx + lid < V) {
+                Uint32 v = Frontier[blockDim * blockIdx + lid];
                 vertices[lid] = v;
                 
-                if (gunrock::util::limits::is_valid(v)) {
+                if (Limits<Uint32>::is_valid(v)) {
                     sedges[lid] = DevicePtr_start[v];
-                    th_deg[lid] =DevicePtr_end[v] - DevicePtr_start[v];
+                    th_deg[0] =DevicePtr_end[v] - DevicePtr_start[v];
                 } else {
-                    th_deg[lid] = 0;
+                    th_deg[0] = 0;
                 }
             }
             else {
-                vertices[lid] = gunrock::numeric_limits<Uint32>::invalid();
-                th_deg[lid] = 0;
+                vertices[lid] = Limits<Uint32>::invalid();
+                th_deg[0] = 0;
             }
         
-       
+            if(blockDim * blockIdx + lid == 1)
+            printf("lid: %d, vertices[lid]: %d, th_deg[0]: %d\n",lid,vertices[lid],th_deg[0]);
      
             
 
@@ -339,9 +280,6 @@ int* _th_deg = malloc_shared<int>(1, q);
           //  SYCL equivalent: 
           //  partial_sum = dpct::group::exclusive_scan(item_ct1, in_the_money, 0, sycl::plus<>(), total_sum);
           // 
-                if(gid == 0 && lid == 0){
-             *_th_deg= th_deg[0];
-                }
 
           // int aggregate_degree_per_block;
           // int local_th_deg = th_deg[0];
@@ -351,16 +289,18 @@ int* _th_deg = malloc_shared<int>(1, q);
             
             aggregate_degree_per_block = th_deg[0];
             local_sum[lid] = th_deg[0];
-            // item.barrier(access::fence_space::local_space);
-            group_barrier(item.get_group());
+            item.barrier(access::fence_space::local_space);
+            // group_barrier(item.get_group());
 
             // Perform the scan operation in local memory
-            for (int d = 1; d < log2((float)local) -1; d++) {
+            for (int d = 1; d < log2(local); d++) {
                 Uint32 stride = (1 << d);
                 int update = (lid >= stride) ? local_sum[lid - stride] : 0;
-                group_barrier(item.get_group());
+                // group_barrier(item.get_group());
+                item.barrier(access::fence_space::local_space);
                 local_sum[lid] += update;
-                group_barrier(item.get_group());
+                // group_barrier(item.get_group());
+                item.barrier(access::fence_space::local_space);
             }
 
             // Write the exclusive scan result back to the thread-local th_deg
@@ -371,13 +311,15 @@ int* _th_deg = malloc_shared<int>(1, q);
             }
 
             // Calculate aggregate degree per block
-            // if (lid == blockDim - 1) {
+            if (lid == blockDim - 1) {
                 aggregate_degree_per_block = local_sum[lid];
-            // }
+            }
       
-       
+            if(gid == 1)
+            printf("lid: %d, agg: %d, th_deg(updated): %d\n",lid,aggregate_degree_per_block,th_deg[0]);
+     
     
-             *(_aggregate_degree_per_block + groupIdx) = aggregate_degree_per_block;
+            //  *(_aggregate_degree_per_block) = aggregate_degree_per_block;
     
            // Store back to shared memory (to later use in the binary search).
           degrees[lid] = th_deg[0];
@@ -406,14 +348,19 @@ int* _th_deg = malloc_shared<int>(1, q);
           sycl::group_barrier(item.get_group());
 
 
-          auto length = gid - lid + blockDim;
+          auto length = blockDim * blockIdx + lid - lid + blockDim;
           if (V < length)
             length = V;
-          length -= gid - lid;
+          length -= blockDim * blockIdx + lid - lid;
 
+      // printf("blockDim = %d", blockDim);
+      // int agg_cnt =0;
+      // if(aggregate_degree_per_block > 0)
+      // printf("agg = %d\n", aggregate_degree_per_block);
       
-
-  for (unsigned int i = lid;            // threadIdx.x
+      
+      
+  for (int i = lid;            // threadIdx.x
        i < aggregate_degree_per_block;  // total degree to process
        i += blockDim    // increment by blockDim.x
   ) {
@@ -438,22 +385,26 @@ int* _th_deg = malloc_shared<int>(1, q);
   
      auto it = upper_bound(degrees,length, i);
       // int id = std::distance(degrees, it) - 1;
-    unsigned int id = it - 1; // Return the distance minus 1
+    unsigned int id = it-1; // Return the distance minus 1
     // if (id < length){
     
     Uint32 v = vertices[id];              // source
-    if (gunrock::util::limits::is_valid(v)){
+    Uint32 e; // edge
+    Uint32 n; // neighbour
+    if (Limits<Uint32>::is_valid(v)){
     // Read from the frontier
-    auto e = sedges[id] + i - degrees[id]; // edge
-    auto n  = DevicePtr_edges[e];           // neighbour
+     e = sedges[id] + i - degrees[id]; 
+     n  = DevicePtr_edges[e];   
 
     bool cond =search(v,n,e);
 // Debug: Print the thread-local th_deg for verification
-            printf("i: %d, it = %d, id = %d, v = %d, e = %d, n = %d, offset[0] = %lu\n", i, it,id,v,e,n,OOffset[0]);
+            
       if (cond) {
       Frontier[OOffset[0] + i] = n;
       }
     }
+    if(blockDim * blockIdx + lid == 1)
+    printf("i: %d, it = %d, l=%d id = %d, v = %d, e = %d, n = %d, offset[0] = %lu\n", i, it,length,id,v,e,n,OOffset[0]);
 }
         
         
