@@ -293,9 +293,9 @@ int* _th_deg = malloc_shared<int>(1, q);
           // item.barrier(sycl::access::fence_space::local_space);
  
          
-            local_sum[lid] = th_deg[0];
+            
 
-            item.barrier(access::fence_space::local_space);
+            // item.barrier(access::fence_space::local_space);
  
             // group_barrier(item.get_group());
 
@@ -322,15 +322,21 @@ int* _th_deg = malloc_shared<int>(1, q);
             //     aggregate_degree_per_block = local_sum[lid];
             // }
       
-            int aggregate_degree_per_block = sycl::exclusive_scan_over_group(item.get_group(), th_deg[0],th_deg[0], sycl::plus<>());
+            unsigned int exclusive_sum = sycl::exclusive_scan_over_group(item.get_group(), th_deg[0], sycl::plus<>());
+            // this generates
+            // lid 0, agg =0
+            // lid 1, agg = 20203
             // printf("global-id: %d, agg: %d\n",gid,aggregate_degree_per_block);
-     
-   
-            printf("+ lid = %d, agg = %d\n", lid, aggregate_degree_per_block);
+            local_sum[lid] = (lid ==0) ? th_deg[0] : exclusive_sum;
+                      item.barrier(access::fence_space::local_space);
+
+            unsigned int aggregate_degree_per_block = local_sum[lid];
+
+            // printf("+ lid = %d, agg = %d\n", lid, aggregate_degree_per_block);
             //  *(_aggregate_degree_per_block) = aggregate_degree_per_block;
     
            // Store back to shared memory (to later use in the binary search).
-          degrees[lid] = th_deg[0];
+          degrees[lid] = exclusive_sum;
          
         //         for (int j = 0; j < th_deg[0]; j++) {
         //           int iterator =  sedges[lid] + j - degrees[lid];
@@ -346,12 +352,12 @@ int* _th_deg = malloc_shared<int>(1, q);
 
         /// 3. Compute block offsets if there's an output frontier.
           // group_barrier(item.get_group());
-          if(lid == 0){
-            sycl::atomic_ref<Uint32, sycl::memory_order::relaxed, 
-                                     sycl::memory_scope::device, 
-                                     sycl::access::address_space::global_space> atomic_ref(block_offsets[0]);
-                    OOffset[0] = atomic_ref.fetch_add(aggregate_degree_per_block);
-          }
+          // if(lid == 0){
+          //   sycl::atomic_ref<Uint32, sycl::memory_order::relaxed, 
+          //                            sycl::memory_scope::device, 
+          //                            sycl::access::address_space::global_space> atomic_ref(block_offsets[0]);
+          //           OOffset[0] = atomic_ref.fetch_add(aggregate_degree_per_block);
+          // }
      
        
           item.barrier(access::fence_space::local_space);
@@ -368,7 +374,7 @@ int* _th_deg = malloc_shared<int>(1, q);
       // printf("agg = %d\n", aggregate_degree_per_block);
       
       //  if(gid == 0)
-       printf("* lid = %d, agg = %d\n", lid, aggregate_degree_per_block);
+       printf("lid = %d, sedges[lid] = %d, degrees[lid] = %d, agg = %d\n", lid,sedges[lid], degrees[lid], aggregate_degree_per_block);
       
   for (int i = lid;            // threadIdx.x
        i < aggregate_degree_per_block;  // total degree to process
@@ -380,18 +386,6 @@ int* _th_deg = malloc_shared<int>(1, q);
   /// to the user-defined lambda operator to process. If there's an output, the
   /// resultant neighbor or invalid vertex is written to the output frontier.
     // Implement a simple upper_bound algorithm for use in SYCL
-
-    // int left = 0;
-    // int right = length;
-
-    // while (left < right) {
-    //     int mid = left + (right - left) / 2;
-    //     if (degrees[mid] <= i) {
-    //         left = mid + 1;
-    //     } else {
-    //         right = mid;
-    //     }
-    // }
   
      auto it = upper_bound(degrees,length, i);
       // int id = std::distance(degrees, it) - 1;
@@ -401,14 +395,14 @@ int* _th_deg = malloc_shared<int>(1, q);
     Uint32 v = vertices[id],e,n;              // source
     if (Limits<Uint32>::is_valid(v)){
     // Read from the frontier
-      e = sedges[id] + i - degrees[id]; 
+      e = sedges[id] + i  - degrees[id]; 
       n  = DevicePtr_edges[e];   
 
     bool cond =search(v,n,e);
 // Debug: Print the thread-local th_deg for verification
               
       if (cond) {
-      Frontier[OOffset[0] + i] = n;
+      VisitMask[n] = 1;
       }
     }
       if(gid == 0)
@@ -457,7 +451,7 @@ event parallel_levelgen_kernel(queue &q,
           if (gid < V) {
             if(VisitMask[gid]){
               // Distance[gid] = iteration;
-              // Visit[gid]=1;
+              Visit[gid]=1;
            }
           }
 
@@ -626,7 +620,7 @@ void FPGARun(int vertexCount,
     int iteration = 0;
     int zero = 0;
 
-    for(int ijk=0; ijk < 1; ijk++){
+    for(int ijk=0; ijk < 100; ijk++){
       if(frontierCountHost[0] == 0){
         std::cout << "total number of iterations" << ijk << "\n";
         break;
