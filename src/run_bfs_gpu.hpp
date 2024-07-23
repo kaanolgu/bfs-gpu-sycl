@@ -118,7 +118,6 @@ int upper_bound(const sycl::local_accessor<T> &arr, int n, int value) {
 //-------------------------------------------------------------------
 template<int ITEMS_PER_THREAD>
 event parallel_explorer_kernel(queue &q,
-                                int N,
                                 int V, // number of vertices
                                 Uint32 iteration,
                                 Uint32* Offset,
@@ -251,8 +250,8 @@ int* _th_deg = malloc_shared<int>(1, q);
                 th_deg[0] = 0;
             }
         
-            if(blockDim * blockIdx + lid == 0)
-            printf("lid: %d, vertices[lid]: %d, th_deg[0]: %d\n",lid,vertices[lid],th_deg[0]);
+            // if(blockDim * blockIdx + lid == 0)
+            // printf("lid: %d, vertices[lid]: %d, th_deg[0]: %d\n",lid,vertices[lid],th_deg[0]);
      
             
 
@@ -373,7 +372,7 @@ int* _th_deg = malloc_shared<int>(1, q);
       // if(aggregate_degree_per_block > 0)
       // printf("agg = %d\n", aggregate_degree_per_block);
       
-      //  if(gid == 0)
+       if(gid < 5)
        printf("lid = %d, sedges[lid] = %d, degrees[lid] = %d, agg = %d\n", lid,sedges[lid], degrees[lid], aggregate_degree_per_block);
       
   for (int i = lid;            // threadIdx.x
@@ -405,8 +404,8 @@ int* _th_deg = malloc_shared<int>(1, q);
       VisitMask[n] = 1;
       }
     }
-      if(gid == 0)
-    printf("i: %d, it = %d, l=%d id = %d, v = %d, e = %d, n = %d, offset[0] = %lu\n", i, it,length,id,v,e,n,OOffset[0]);
+      // if(gid == 0)
+    // printf("i: %d, it = %d, l=%d id = %d, v = %d, e = %d, n = %d, offset[0] = %lu\n", i, it,length,id,v,e,n,OOffset[0]);
     // if(blockDim * blockIdx + lid == 1)
     // printf("i: %d, it = %d, l=%d id = %d, v = %d, e = %d, n = %d, offset[0] = %lu\n", i, it,length,id,v,e,n,OOffset[0]);
 }
@@ -620,13 +619,13 @@ void FPGARun(int vertexCount,
     int iteration = 0;
     int zero = 0;
 
-    for(int ijk=0; ijk < 100; ijk++){
+    for(int ijk=0; ijk < 2; ijk++){
       if(frontierCountHost[0] == 0){
         std::cout << "total number of iterations" << ijk << "\n";
         break;
       }    
       q.memcpy(frontierCountDevice, &zero, sizeof(Uint32)).wait();  
-      exploreEvent = parallel_explorer_kernel<1>(q,vertexCount,frontierCountHost[0],iteration,OffsetDevice,EdgesDevice,FrontierDevice,frontierCountDevice, VisitMaskDevice,DistanceDevice,PrefixSumDevice);
+      exploreEvent = parallel_explorer_kernel<1>(q,frontierCountHost[0],iteration,OffsetDevice,EdgesDevice,FrontierDevice,frontierCountDevice, VisitMaskDevice,DistanceDevice,PrefixSumDevice);
       q.wait();
       // Level Generate
       levelEvent =parallel_levelgen_kernel(q,vertexCount,DistanceDevice,VisitMaskDevice,VisitDevice,iteration);

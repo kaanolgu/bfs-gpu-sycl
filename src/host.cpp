@@ -55,10 +55,11 @@ void print_levels(std::vector<datatypeA> &A,std::string nameA,std::vector<dataty
         printf("|---------------------------------------------------|\n");
 int sum =0;
 int nok_sum =0;
+for(int level=0; level < size; level++){
   for (size_t i = 0; i < B.size(); ++i) {
-        if (B[i] == 1) {
+        if (B[i] == level) {
             
-            if (A[i] != 1) {
+            if (A[i] != level) {
               nok_sum+=1;
             //     std::cout << "ERROR at index " << i << ", A[i] = " << A[i] << ", B[i] = " << B[i] << std::endl;
             }else{
@@ -66,9 +67,9 @@ int nok_sum =0;
             }
         }
     }
-    std::cout<<"Matching -> "<< sum << std::endl;
+    std::cout<<"Level "<< level <<" \nMatching -> "<< sum << std::endl;
     std::cout<<"Non Matching -> "<< nok_sum << std::endl;
-
+}
 }
 
 int main(int argc, char * argv[])
