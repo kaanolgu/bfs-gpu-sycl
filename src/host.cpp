@@ -54,15 +54,20 @@ void print_levels(std::vector<datatypeA> &A,std::string nameA,std::vector<dataty
     std::cout << "TEST FAILED!" << std::endl;
         printf("|---------------------------------------------------|\n");
 int sum =0;
+int nok_sum =0;
   for (size_t i = 0; i < B.size(); ++i) {
         if (B[i] == 1) {
-            sum +=1;
+            
             if (A[i] != 1) {
-                std::cout << "ERROR at index " << i << ", A[i] = " << A[i] << ", B[i] = " << B[i] << std::endl;
+              nok_sum+=1;
+            //     std::cout << "ERROR at index " << i << ", A[i] = " << A[i] << ", B[i] = " << B[i] << std::endl;
+            }else{
+                sum +=1;
             }
         }
     }
-    std::cout<<"-> "<< sum << std::endl;
+    std::cout<<"Matching -> "<< sum << std::endl;
+    std::cout<<"Non Matching -> "<< nok_sum << std::endl;
 
 }
 

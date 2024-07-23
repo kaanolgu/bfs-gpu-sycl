@@ -36,7 +36,13 @@ public:
     }
 };
 
-
+// Define a custom binary operation
+struct plus_op {
+    template <typename T>
+    T operator()(T a, T b) const {
+        return a + b;
+    }
+};
 
 
 // initialize device arr with val, if needed set arr[pos] = pos_val
@@ -126,7 +132,7 @@ event parallel_explorer_kernel(queue &q,
 
    // Define the work-group size and the number of work-groups
     const size_t local = NUMBER_OF_WORKGROUPS;  // Number of work-items per work-group
-    const size_t global = ((N + local - 1) / local) * local;
+    const size_t global = ((V + local - 1) / local) * local;
     // int ncus = q.get_device().get_info<info::device::max_compute_units>();
 
     auto search = [Distance, iteration](
@@ -229,8 +235,8 @@ int* _th_deg = malloc_shared<int>(1, q);
         device_ptr<Uint32> DevicePtr_edges(Edges); 
         // device_ptr<MyUint1> DevicePtr_visited(Visit);  
 
-            if (blockDim * blockIdx + lid < V) {
-                Uint32 v = Frontier[blockDim * blockIdx + lid];
+            if (gid < V) {
+                Uint32 v = Frontier[gid];
                 vertices[lid] = v;
                 
                 if (Limits<Uint32>::is_valid(v)) {
@@ -245,7 +251,7 @@ int* _th_deg = malloc_shared<int>(1, q);
                 th_deg[0] = 0;
             }
         
-            if(blockDim * blockIdx + lid == 1)
+            if(blockDim * blockIdx + lid == 0)
             printf("lid: %d, vertices[lid]: %d, th_deg[0]: %d\n",lid,vertices[lid],th_deg[0]);
      
             
@@ -285,45 +291,46 @@ int* _th_deg = malloc_shared<int>(1, q);
           // int local_th_deg = th_deg[0];
           // th_deg = dpct::group::exclusive_scan(item, th_deg, 0, sycl::plus<>(), aggregate_degree_per_block);
           // item.barrier(sycl::access::fence_space::local_space);
-            int aggregate_degree_per_block;
-            
-            aggregate_degree_per_block = th_deg[0];
+ 
+         
             local_sum[lid] = th_deg[0];
+
             item.barrier(access::fence_space::local_space);
+ 
             // group_barrier(item.get_group());
 
-            // Perform the scan operation in local memory
-            for (int d = 1; d < log2(local); d++) {
-                Uint32 stride = (1 << d);
-                int update = (lid >= stride) ? local_sum[lid - stride] : 0;
-                // group_barrier(item.get_group());
-                item.barrier(access::fence_space::local_space);
-                local_sum[lid] += update;
-                // group_barrier(item.get_group());
-                item.barrier(access::fence_space::local_space);
-            }
+            // // Perform the scan operation in local memory
+            // for (int d = 1; d < log2(local); d++) {
+            //     Uint32 stride = (1 << d);
+            //     int update = (lid >= stride) ? local_sum[lid - stride] : 0;
+            //     // group_barrier(item.get_group());
+            //     item.barrier(access::fence_space::local_space);
+            //     local_sum[lid] += update;
+            //     // group_barrier(item.get_group());
+            //     item.barrier(access::fence_space::local_space);
+            // }
 
-            // Write the exclusive scan result back to the thread-local th_deg
-            if (lid > 0) {
-                th_deg[0] = local_sum[blockDim - 1];
-            } else {
-                th_deg[0] = 0;
-            }
+            // // Write the exclusive scan result back to the thread-local th_deg
+            // if (lid > 0) {
+            //     th_deg[0] = local_sum[blockDim - 1];
+            // } else {
+            //     th_deg[0] = 0;
+            // }
 
-            // Calculate aggregate degree per block
-            if (lid == blockDim - 1) {
-                aggregate_degree_per_block = local_sum[lid];
-            }
+            // // Calculate aggregate degree per block
+            // if (lid == blockDim - 1) {
+            //     aggregate_degree_per_block = local_sum[lid];
+            // }
       
-            if(gid == 1)
-            printf("lid: %d, agg: %d, th_deg(updated): %d\n",lid,aggregate_degree_per_block,th_deg[0]);
+            int aggregate_degree_per_block = sycl::exclusive_scan_over_group(item.get_group(), th_deg[0],th_deg[0], sycl::plus<>());
+            // printf("global-id: %d, agg: %d\n",gid,aggregate_degree_per_block);
      
-    
+   
+            printf("+ lid = %d, agg = %d\n", lid, aggregate_degree_per_block);
             //  *(_aggregate_degree_per_block) = aggregate_degree_per_block;
     
            // Store back to shared memory (to later use in the binary search).
           degrees[lid] = th_deg[0];
-    
          
         //         for (int j = 0; j < th_deg[0]; j++) {
         //           int iterator =  sedges[lid] + j - degrees[lid];
@@ -345,20 +352,23 @@ int* _th_deg = malloc_shared<int>(1, q);
                                      sycl::access::address_space::global_space> atomic_ref(block_offsets[0]);
                     OOffset[0] = atomic_ref.fetch_add(aggregate_degree_per_block);
           }
-          sycl::group_barrier(item.get_group());
+     
+       
+          item.barrier(access::fence_space::local_space);
 
 
-          auto length = blockDim * blockIdx + lid - lid + blockDim;
+          auto length = gid - lid + blockDim;
           if (V < length)
             length = V;
-          length -= blockDim * blockIdx + lid - lid;
+          length -= gid - lid;
 
       // printf("blockDim = %d", blockDim);
       // int agg_cnt =0;
       // if(aggregate_degree_per_block > 0)
       // printf("agg = %d\n", aggregate_degree_per_block);
       
-      
+      //  if(gid == 0)
+       printf("* lid = %d, agg = %d\n", lid, aggregate_degree_per_block);
       
   for (int i = lid;            // threadIdx.x
        i < aggregate_degree_per_block;  // total degree to process
@@ -388,23 +398,23 @@ int* _th_deg = malloc_shared<int>(1, q);
     unsigned int id = it-1; // Return the distance minus 1
     // if (id < length){
     
-    Uint32 v = vertices[id];              // source
-    Uint32 e; // edge
-    Uint32 n; // neighbour
+    Uint32 v = vertices[id],e,n;              // source
     if (Limits<Uint32>::is_valid(v)){
     // Read from the frontier
-     e = sedges[id] + i - degrees[id]; 
-     n  = DevicePtr_edges[e];   
+      e = sedges[id] + i - degrees[id]; 
+      n  = DevicePtr_edges[e];   
 
     bool cond =search(v,n,e);
 // Debug: Print the thread-local th_deg for verification
-            
+              
       if (cond) {
       Frontier[OOffset[0] + i] = n;
       }
     }
-    if(blockDim * blockIdx + lid == 1)
+      if(gid == 0)
     printf("i: %d, it = %d, l=%d id = %d, v = %d, e = %d, n = %d, offset[0] = %lu\n", i, it,length,id,v,e,n,OOffset[0]);
+    // if(blockDim * blockIdx + lid == 1)
+    // printf("i: %d, it = %d, l=%d id = %d, v = %d, e = %d, n = %d, offset[0] = %lu\n", i, it,length,id,v,e,n,OOffset[0]);
 }
         
         
