@@ -24,25 +24,25 @@ using namespace sycl;
 // using PipelinedLSU = ext::intel::lsu<>;
 // using BurstCoalescedLSU = ext::intel::lsu<ext::intel::burst_coalesce<true>,ext::intel::statically_coalesce<false>>;
 // using CacheLSU = ext::intel::lsu<ext::intel::burst_coalesce<true>, ext::intel::cache<1024*1024>,ext::intel::statically_coalesce<false>>;
-template <typename vertex_t>
-class Limits {
-public:
-    static vertex_t invalid() {
-        return std::numeric_limits<vertex_t>::max();
-    }
+// template <typename vertex_t>
+// class Limits {
+// public:
+//     static vertex_t invalid() {
+//         return std::numeric_limits<vertex_t>::max();
+//     }
 
-    static bool is_valid(vertex_t v) {
-        return v != invalid();
-    }
-};
+//     static bool is_valid(vertex_t v) {
+//         return v != invalid();
+//     }
+// };
 
-// Define a custom binary operation
-struct plus_op {
-    template <typename T>
-    T operator()(T a, T b) const {
-        return a + b;
-    }
-};
+// // Define a custom binary operation
+// struct plus_op {
+//     template <typename T>
+//     T operator()(T a, T b) const {
+//         return a + b;
+//     }
+// };
 
 
 // initialize device arr with val, if needed set arr[pos] = pos_val
@@ -126,7 +126,7 @@ event parallel_explorer_kernel(queue &q,
                                 Uint32 *frontierCount,
                                 MyUint1 *VisitMask,
                                 Uint32 *Distance,
-                                Uint32 *PrefixSum)
+                                MyUint1 *Visit)
     {
 
    // Define the work-group size and the number of work-groups
@@ -134,7 +134,7 @@ event parallel_explorer_kernel(queue &q,
     const size_t global = ((V + local - 1) / local) * local;
     // int ncus = q.get_device().get_info<info::device::max_compute_units>();
 
-    auto search = [Distance, iteration](
+    auto search = [Visit, iteration](
                       Uint32 const& source,    // ... source
                       Uint32 const& neighbor,  // neighbor
                       Uint32 const& edge        // edge
@@ -156,12 +156,14 @@ event parallel_explorer_kernel(queue &q,
       // auto old_distance =
       //     math::atomic::min(&Distance[neighbor], iteration + 1);
 
-      auto old_distance = sycl::atomic_ref<Uint32, 
-                               memory_order::relaxed, 
-                               memory_scope::device, 
-                               access::address_space::global_space>(Distance[neighbor])
-                        .fetch_min(iteration + 1);
-      return (iteration + 1 < old_distance);
+      // auto old_distance = sycl::atomic_ref<Uint32, 
+      //                          memory_order::relaxed, 
+      //                          memory_scope::device, 
+      //                          access::address_space::global_space>(Distance[neighbor])
+      //                   .fetch_min(iteration + 1);
+      auto old_visit_status = Visit[neighbor];
+      // return (iteration + 1 < old_distance);
+      return (!old_visit_status);
     };
 
 
@@ -238,7 +240,7 @@ int* _th_deg = malloc_shared<int>(1, q);
                 Uint32 v = Frontier[gid];
                 vertices[lid] = v;
                 
-                if (Limits<Uint32>::is_valid(v)) {
+                if (v != -1) {
                     sedges[lid] = DevicePtr_start[v];
                     th_deg[0] =DevicePtr_end[v] - DevicePtr_start[v];
                 } else {
@@ -246,7 +248,7 @@ int* _th_deg = malloc_shared<int>(1, q);
                 }
             }
             else {
-                vertices[lid] = Limits<Uint32>::invalid();
+                vertices[lid] = -1;
                 th_deg[0] = 0;
             }
         
@@ -393,7 +395,7 @@ event parallel_levelgen_kernel(queue &q,
           int gid = item.get_global_id();
           if (gid < V) {
             if(VisitMask[gid]){
-              // Distance[gid] = iteration;
+              Distance[gid] = iteration+1;
               Visit[gid]=1;
            }
           }
@@ -525,7 +527,6 @@ void FPGARun(int vertexCount,
     std::cout << "Running on device: "
               << q.get_device().get_info<info::device::name>() << "\n";
     std::vector<Uint32> FrontierHost(vertexCount,0);
-    std::vector<Uint32> PrefixSumHost(vertexCount+1,0);
     FrontierHost[0] = sourceNode;
     // FrontierHost[1] = 87;s
 
@@ -536,7 +537,6 @@ void FPGARun(int vertexCount,
     MyUint1 *VisitDevice      = malloc_device<MyUint1>(VisitHost.size(), q); 
     Uint32 *EdgesDevice       = malloc_device<Uint32>(IndexHost.size(), q); 
     Uint32 *FrontierDevice    = malloc_device<Uint32>(FrontierHost.size(), q); 
-    Uint32 *PrefixSumDevice   = malloc_device<Uint32>(PrefixSumHost.size(), q); // prefix sum USM
 
 
     copyToDevice(q,IndexHost,EdgesDevice);
@@ -546,7 +546,7 @@ void FPGARun(int vertexCount,
     copyToDevice(q,VisitHost,VisitDevice);
     copyToDevice(q,FrontierHost,FrontierDevice);
 
-    // We will have a single element int the pipe which is source vertex
+    // We will have a single eflement int the pipe which is source vertex
     std::vector<Uint32> frontierCountHost(1,1);
     Uint32 *frontierCountDevice = malloc_device<Uint32>(1, q);
 
@@ -569,7 +569,7 @@ void FPGARun(int vertexCount,
         break;
       }    
       q.memcpy(frontierCountDevice, &zero, sizeof(Uint32)).wait();  
-      exploreEvent = parallel_explorer_kernel<1>(q,frontierCountHost[0],iteration,OffsetDevice,EdgesDevice,FrontierDevice,frontierCountDevice, VisitMaskDevice,DistanceDevice,PrefixSumDevice);
+      exploreEvent = parallel_explorer_kernel<1>(q,frontierCountHost[0],iteration,OffsetDevice,EdgesDevice,FrontierDevice,frontierCountDevice, VisitMaskDevice,DistanceDevice,VisitDevice);
       q.wait();
       // Level Generate
       levelEvent =parallel_levelgen_kernel(q,vertexCount,DistanceDevice,VisitMaskDevice,VisitDevice,iteration);
