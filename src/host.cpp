@@ -53,9 +53,10 @@ void print_levels(std::vector<datatypeA> &A,std::string nameA,std::vector<dataty
   else
     std::cout << "TEST FAILED!" << std::endl;
         printf("|---------------------------------------------------|\n");
-int sum =0;
-int nok_sum =0;
+
 for(int level=0; level < size; level++){
+  int sum =0;
+int nok_sum =0;
   for (size_t i = 0; i < B.size(); ++i) {
         if (B[i] == level) {
             
@@ -98,9 +99,14 @@ int main(int argc, char * argv[])
   // FPGA
   ///////////
 
+  std::cout << "start : " << source_indptr[87] << ", end: " << source_indptr[88] << ", total :" << (source_indptr[88] - source_indptr[87]) << std::endl;
+
+  
+
   // allocate mem for the result on host side
-  std::vector<Uint32> h_dist(numCols,-2);
-  h_dist[start_vertex]=0;  
+  std::vector<Uint32> h_dist(numCols,-1);
+  h_dist[start_vertex]=0; 
+  // h_dist[87]=0;  
   std::vector<Uint32> h_graph_nodes_start;
   //read the start_vertex node from the file
   //set the start_vertex node as 1 in the mask
@@ -108,7 +114,8 @@ int main(int argc, char * argv[])
   // make this a different datatype and cast it to the kernel
   // hpm version of the stratix 10 try 
   std::vector<MyUint1> h_graph_visited(numCols,0); 
-  h_graph_visited[start_vertex]=1; 
+  h_graph_visited[start_vertex]=1;
+  // h_graph_visited[87]=1; 
   int indptr_end = old_buffer_size_indptr[1];
   int inds_end = old_buffer_size_inds[1];
   // initalize the memory

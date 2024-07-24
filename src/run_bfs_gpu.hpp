@@ -255,81 +255,25 @@ int* _th_deg = malloc_shared<int>(1, q);
      
             
 
-            sycl::group_barrier(item.get_group());
-        //  item.barrier(sycl::access::fence_space::local_space);
-  //  });
-  //       });
-  //       copyToHost(q,vertices,vertices_a);
-  //       for(int i : vertices_a){
-  //         std::cout << i << std::endl;
-  //       }
-        // DEBUG
-        // ––––––––
-        //  for(int j = 0; j < degrees[lid]; j++) {
-        //     int iterator =  sedges[lid] + j;
-        //     int id = DevicePtr_edges[iterator];
-        //     MyUint1 visited_condition = DevicePtr_visited[id];
-        //     if (!visited_condition) {
-        //         VisitMask[id]=1;
-        //     }
-        //  }
+            // sycl::group_barrier(item.get_group());
+         item.barrier(sycl::access::fence_space::local_space);
 
-            // Step 1:  Iterate through pipe(frontier) to retrieve number of
-            //          neighbours for each node in the pipe. We defined a new
-            //          usm_num_of_neighbours which is 
-            //          Offset[x+1] - Offset[x]
-            //  https://github.com/oneapi-src/oneAPI-samples/blob/bcc0cfe2bf4479303391dc33104f88f57f7d5f73/Libraries/oneMKL/guided_american_options_SYCLmigration/src/longstaff_schwartz_svd_2.cu
-          //  CUDA code: 
-          //  BlockScan(smem_storage.for_scan).ExclusiveSum(in_the_money, partial_sum, total_sum);
-          // 
-          //  SYCL equivalent: 
-          //  partial_sum = dpct::group::exclusive_scan(item_ct1, in_the_money, 0, sycl::plus<>(), total_sum);
-          // 
-
-          // int aggregate_degree_per_block;
-          // int local_th_deg = th_deg[0];
-          // th_deg = dpct::group::exclusive_scan(item, th_deg, 0, sycl::plus<>(), aggregate_degree_per_block);
-          // item.barrier(sycl::access::fence_space::local_space);
  
-         
-            
-
-            // item.barrier(access::fence_space::local_space);
  
-            // group_barrier(item.get_group());
-
-            // // Perform the scan operation in local memory
-            // for (int d = 1; d < log2(local); d++) {
-            //     Uint32 stride = (1 << d);
-            //     int update = (lid >= stride) ? local_sum[lid - stride] : 0;
-            //     // group_barrier(item.get_group());
-            //     item.barrier(access::fence_space::local_space);
-            //     local_sum[lid] += update;
-            //     // group_barrier(item.get_group());
-            //     item.barrier(access::fence_space::local_space);
-            // }
-
-            // // Write the exclusive scan result back to the thread-local th_deg
-            // if (lid > 0) {
-            //     th_deg[0] = local_sum[blockDim - 1];
-            // } else {
-            //     th_deg[0] = 0;
-            // }
-
-            // // Calculate aggregate degree per block
-            // if (lid == blockDim - 1) {
-            //     aggregate_degree_per_block = local_sum[lid];
-            // }
       
             unsigned int exclusive_sum = sycl::exclusive_scan_over_group(item.get_group(), th_deg[0], sycl::plus<>());
             // this generates
             // lid 0, agg =0
             // lid 1, agg = 20203
-            // printf("global-id: %d, agg: %d\n",gid,aggregate_degree_per_block);
-            local_sum[lid] = (lid ==0) ? th_deg[0] : exclusive_sum;
-                      item.barrier(access::fence_space::local_space);
+            // printf("locall-id: %d, agg: %d\n",lid,exclusive_sum);
+            local_sum[lid] = exclusive_sum;
+            item.barrier(access::fence_space::local_space);
+            th_deg[0] = exclusive_sum;
+                      
 
-            unsigned int aggregate_degree_per_block = local_sum[lid];
+            unsigned int aggregate_degree_per_block = local_sum[blockDim-1];
+
+          // printf("block_id = %d, local_idx : %d, v= %d,sedges = %d  th_deg = %d, aggregate_degree_per_block: %d\n", blockIdx,lid,vertices[lid],sedges[lid],th_deg[0],aggregate_degree_per_block);
 
             // printf("+ lid = %d, agg = %d\n", lid, aggregate_degree_per_block);
             //  *(_aggregate_degree_per_block) = aggregate_degree_per_block;
@@ -372,8 +316,8 @@ int* _th_deg = malloc_shared<int>(1, q);
       // if(aggregate_degree_per_block > 0)
       // printf("agg = %d\n", aggregate_degree_per_block);
       
-       if(gid < 5)
-       printf("lid = %d, sedges[lid] = %d, degrees[lid] = %d, agg = %d\n", lid,sedges[lid], degrees[lid], aggregate_degree_per_block);
+      //  if(gid < 5)
+      //  printf("vertices = %d, lid = %d, sedges[lid] = %d, degrees[lid] = %d, agg = %d\n", vertices[lid],lid,sedges[lid], degrees[lid], aggregate_degree_per_block);
       
   for (int i = lid;            // threadIdx.x
        i < aggregate_degree_per_block;  // total degree to process
@@ -583,7 +527,8 @@ void FPGARun(int vertexCount,
     std::vector<Uint32> FrontierHost(vertexCount,0);
     std::vector<Uint32> PrefixSumHost(vertexCount+1,0);
     FrontierHost[0] = sourceNode;
-    Uint32 pipe_size=1;
+    // FrontierHost[1] = 87;s
+
 
     Uint32* OffsetDevice      = malloc_device<Uint32>(OffsetHost.size(), q);
     Uint32 *DistanceDevice    = malloc_device<Uint32>(DistanceHost.size(), q); 
@@ -591,7 +536,6 @@ void FPGARun(int vertexCount,
     MyUint1 *VisitDevice      = malloc_device<MyUint1>(VisitHost.size(), q); 
     Uint32 *EdgesDevice       = malloc_device<Uint32>(IndexHost.size(), q); 
     Uint32 *FrontierDevice    = malloc_device<Uint32>(FrontierHost.size(), q); 
-    Uint32 *usm_pipe_size     = malloc_device<Uint32>(1, q); 
     Uint32 *PrefixSumDevice   = malloc_device<Uint32>(PrefixSumHost.size(), q); // prefix sum USM
 
 
@@ -619,7 +563,7 @@ void FPGARun(int vertexCount,
     int iteration = 0;
     int zero = 0;
 
-    for(int ijk=0; ijk < 2; ijk++){
+    for(int ijk=0; ijk < 100; ijk++){
       if(frontierCountHost[0] == 0){
         std::cout << "total number of iterations" << ijk << "\n";
         break;
