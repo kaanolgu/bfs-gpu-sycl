@@ -1,7 +1,7 @@
 #define MAX_NUM_CU 4
 // using MyUint1 = ac_int<1, false>;
 #include "unrolled_loop.hpp"
-int numRows,numCols,numNonz;
+int numRows = 0,numCols =0,numNonz =0;
 
 constexpr int log2(int num) {
     int result = 0;

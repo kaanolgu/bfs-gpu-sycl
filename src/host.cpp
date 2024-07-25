@@ -54,9 +54,13 @@ void print_levels(std::vector<datatypeA> &A,std::string nameA,std::vector<dataty
     std::cout << "TEST FAILED!" << std::endl;
         printf("|---------------------------------------------------|\n");
 
+
+   std::cout<<"Missing ones in GPU : ";
 for(int level=0; level < size; level++){
+  
   int sum =0;
 int nok_sum =0;
+std::cout << "level :" << level << " ";
   for (size_t i = 0; i < B.size(); ++i) {
         if (B[i] == level) {
             
@@ -67,9 +71,16 @@ int nok_sum =0;
                 sum +=1;
             }
         }
+        if(B[i] != level){
+          if(A[i] == level){
+              std::cout << i << "[" << B[i] << "], ";
+          }
+        }
     }
+    std::cout << "\n";
     std::cout<<"Level "<< level <<" \nMatching -> "<< sum << std::endl;
     std::cout<<"Non Matching -> "<< nok_sum << std::endl;
+ 
 }
 }
 
@@ -94,44 +105,56 @@ int main(int argc, char * argv[])
              offset_meta, offset_indptr, offset_inds);
   std::cout << "#############################################################\n" << std::endl;
   numCols = source_meta[1];  // cols -> total number of vertices
-
+  std::cout << "number of vertices "<< numCols << std::endl;
   ////////////
   // FPGA
   ///////////
 
-  std::cout << "start : " << source_indptr[87] << ", end: " << source_indptr[88] << ", total :" << (source_indptr[88] - source_indptr[87]) << std::endl;
-
+  std::cout << "i: " << 135368<< ", num_Neighbours: "<< (source_indptr[135368+1] - source_indptr[135368]) << std::endl;
+std::cout << "begin addr : " << source_indptr[135368] << std::endl;
   
 
   // allocate mem for the result on host side
   std::vector<Uint32> h_dist(numCols,-1);
+    std::cout << "number of vertices "<< numCols << std::endl;
+
   h_dist[start_vertex]=0; 
-  // h_dist[87]=0;  
+  // h_dist[0]=1;  
+
   std::vector<Uint32> h_graph_nodes_start;
   //read the start_vertex node from the file
   //set the start_vertex node as 1 in the mask
   std::vector<MyUint1> h_updating_graph_mask(numCols,0);
+    std::cout << "number of vertices "<< numCols << std::endl;
+
   // make this a different datatype and cast it to the kernel
   // hpm version of the stratix 10 try 
   std::vector<MyUint1> h_graph_visited(numCols,0); 
+    std::cout << "number of vertices "<< numCols << std::endl;
+
   h_graph_visited[start_vertex]=1;
-  // h_graph_visited[87]=1; 
+  // h_graph_visited[0]=1; 
+
   int indptr_end = old_buffer_size_indptr[1];
   int inds_end = old_buffer_size_inds[1];
   // initalize the memory
-  int numEdges  = source_meta[2 + old_buffer_size_meta[0]];  // nonZ count -> total edges
-  numRows  = source_meta[0 + old_buffer_size_meta[0]];  // this it the value we want! (rows)
+  int numEdges  = source_meta[2];  // nonZ count -> total edges
+  numRows  = source_meta[0];  // this it the value we want! (rows)
   // Sanity Check if we loaded the graph properly
   assert(numRows <= numCols);
-  std::cout << std::setw(6) << std::left << "# Graph Information" << "\n Vertices (nodes) = " << numRows << " \n Edges = "<< numEdges << "\n";
+    std::cout << "number of vertices "<< numCols << std::endl;
 
-  FPGARun(numCols,
+  std::cout << std::setw(6) << std::left << "# Graph Information" << "\n Vertices (nodes) = " << numRows << " \n Edges = "<< numEdges << "\n";
+  std::cout << "number of vertices "<< numCols << std::endl;
+
+  GPURun(numRows,
                   source_inds,
                   source_indptr,
                   h_updating_graph_mask,
                   h_graph_visited,
                   h_dist,
                   start_vertex,numEdges);  
+  std::cout << "number of vertices "<< numCols << std::endl;
 
   // initalize the memory again
   std::vector<Uint32> host_graph_mask(numCols,0);
@@ -152,7 +175,7 @@ int main(int argc, char * argv[])
   // Check if iterator is not pointing to the end of vector
   int maxLevelCPU = (*it +2);
 
-  print_levels(host_level,"cpu",h_dist,"fpga",maxLevelCPU); // CPU Results
+  print_levels(host_level,"cpu",h_dist,"fpga",4); // CPU Results
 
 
   return 0;
