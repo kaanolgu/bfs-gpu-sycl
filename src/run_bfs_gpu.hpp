@@ -16,7 +16,7 @@ using namespace sycl;
 #include <sycl/sycl.hpp>
 // This function returns a vector of two (not necessarily distinct) devices,
 // allowing computation to be split across said devices.
-#define NUMBER_OF_WORKGROUPS 256
+#define THREADS_PER_BLOCK 256
 
 // Aliases for LSU Control Extension types
 // Implemented using template arguments such as prefetch & burst_coalesce
@@ -121,7 +121,7 @@ template<int ITEMS_PER_THREAD>
 event parallel_explorer_kernel(queue &q,
                                 int V, // number of vertices
                                 Uint32 iteration,
-                                Uint32* Offset,
+                                Uint32* usm_nodes_start,
                                 Uint32 *Edges,
                                 Uint32* Frontier,
                                 Uint32 *frontierCount,
@@ -131,7 +131,7 @@ event parallel_explorer_kernel(queue &q,
     {
 
    // Define the work-group size and the number of work-groups
-    const size_t local = NUMBER_OF_WORKGROUPS;  // Number of work-items per work-group
+    const size_t local = THREADS_PER_BLOCK;  // Number of work-items per work-group
     const size_t global = ((V + local - 1) / local) * local;
     // int ncus = q.get_device().get_info<info::device::max_compute_units>();
 
@@ -158,7 +158,7 @@ event parallel_explorer_kernel(queue &q,
       //     math::atomic::min(&Distance[neighbor], iteration + 1);
 
       Uint32 old_distance = sycl::atomic_ref<Uint32, 
-                               memory_order::relaxed, 
+                               memory_order::acq_rel, 
                                memory_scope::device, 
                                access::address_space::global_space>(Distance[neighbor])
                         .fetch_min(iteration+1);
@@ -222,7 +222,6 @@ event parallel_explorer_kernel(queue &q,
           sycl::local_accessor<Uint32> vertices(local, h);
           sycl::local_accessor<Uint32> sedges(local, h);
           sycl::local_accessor<Uint32> degrees(local, h);
-          // sycl::local_accessor<Uint32> length(local, h);
         h.parallel_for<class ExploreNeighbours>(range, [=](nd_item<1> item) {
           const int gid = item.get_global_id(0);    // global id
           const int lid  = item.get_local_id(0); // threadIdx.x
@@ -232,18 +231,13 @@ event parallel_explorer_kernel(queue &q,
           Uint32 th_deg[ITEMS_PER_THREAD]; // this variable is shared between workitems
         // this variable will be instantiated for each work-item separately
 
-     
-
-        device_ptr<Uint32> DevicePtr_start(Offset);  
-        device_ptr<Uint32> DevicePtr_end(Offset + 1);  
-        device_ptr<Uint32> DevicePtr_edges(Edges); 
             if (gid < V) {
                 Uint32 v = Frontier[gid];
                 vertices[lid] = v;
                 
                 if (v != -1) {
-                    sedges[lid] = DevicePtr_start[v];
-                    th_deg[0] =DevicePtr_end[v] - DevicePtr_start[v];
+                    sedges[lid] = usm_nodes_start[v];
+                    th_deg[0] =usm_nodes_start[v+1] - usm_nodes_start[v];
                 } else {
                     th_deg[0] = 0;
                 }
@@ -253,51 +247,33 @@ event parallel_explorer_kernel(queue &q,
                 th_deg[0] = 0;
             }
         
-          item.barrier(sycl::access::fence_space::local_space);
+          sycl::group_barrier(item.get_group());
 
  
  
-      
-            unsigned int exclusive_sum = sycl::exclusive_scan_over_group(item.get_group(), th_deg[0], sycl::plus<>());
+           /// 2. Exclusive sum of degrees to find total work items per block.
+             th_deg[0] = sycl::exclusive_scan_over_group(item.get_group(), th_deg[0], sycl::plus<>());
                       
-            local_sum[lid] = exclusive_sum;
-             item.barrier(access::fence_space::local_space);
-            th_deg[0] = exclusive_sum;
+            local_sum[lid] = th_deg[0];
+            sycl::group_barrier(item.get_group());
            
-
             unsigned int aggregate_degree_per_block = local_sum[blockDim-1];
-
-          // printf("block_id = %d, local_idx : %d, v= %d,sedges = %d  th_deg = %d, aggregate_degree_per_block: %d\n", blockIdx,lid,vertices[lid],sedges[lid],th_deg[0],aggregate_degree_per_block);
-
-            // printf("+ lid = %d, agg = %d\n", lid, aggregate_degree_per_block);
-            //  *(_aggregate_degree_per_block) = aggregate_degree_per_block;
     
            // Store back to shared memory (to later use in the binary search).
-          degrees[lid] = exclusive_sum;
-         item.barrier(access::fence_space::local_space);
-        //         for (int j = 0; j < th_deg[0]; j++) {
-        //           int iterator =  sedges[lid] + j - degrees[lid];
-        //     int id = DevicePtr_edges[iterator];
-        //     MyUint1 visited_condition = DevicePtr_visited[id];
-        //     if (!visited_condition) {
-        //         VisitMask[id]=1;
+          degrees[lid] = th_deg[0];
+         
 
-        //     }
-        //  }
-
-        // }
 
         /// 3. Compute block offsets if there's an output frontier.
-          group_barrier(item.get_group());
+          // group_barrier(item.get_group());
           if(lid == 0){
-            sycl::atomic_ref<Uint32, sycl::memory_order::relaxed, 
+            sycl::atomic_ref<Uint32, sycl::memory_order::acq_rel, 
                                      sycl::memory_scope::device, 
                                      sycl::access::address_space::global_space> atomic_ref(block_offsets[0]);
                     OOffset[0] = atomic_ref.fetch_add(aggregate_degree_per_block);
           }
-     
-       
-          // item.barrier(access::fence_space::local_space);
+          
+          group_barrier(item.get_group());
 
 
           // auto length = gid - lid + blockDim;
@@ -336,7 +312,7 @@ event parallel_explorer_kernel(queue &q,
     if (v != (Uint32)(-1)){
     // Read from the frontier
     Uint32  e = sedges[id] + i  - degrees[id]; 
-    Uint32  n  = DevicePtr_edges[e];   
+    Uint32  n  = Edges[e];   
 
     bool cond =(search(v,n,e)) && !Visit[n];
 // Debug: Print the thread-local th_deg for verification
@@ -370,7 +346,7 @@ event parallel_levelgen_kernel(queue &q,
                                 int iteration
                                  ){
    // Define the work-group size and the number of work-groups
-    const size_t local = NUMBER_OF_WORKGROUPS;  // Number of work-items per work-group
+    const size_t local = THREADS_PER_BLOCK;  // Number of work-items per work-group
     const size_t global = ((V + local - 1) / local) * local;
 
     // Setup the range
@@ -402,7 +378,7 @@ event pipegen_kernel(queue &q,
 
           
   
-    const size_t local = NUMBER_OF_WORKGROUPS;  // Number of work-items per work-group
+    const size_t local = THREADS_PER_BLOCK;  // Number of work-items per work-group
     const size_t global = ((V + local - 1) / local) * local;
 
     // Setup the range
@@ -437,7 +413,7 @@ event maskremove_kernel(queue &q,
                                  ){
                                   
    // Define the work-group size and the number of work-groups
-    const size_t local = NUMBER_OF_WORKGROUPS;  // Number of work-items per work-group
+    const size_t local = THREADS_PER_BLOCK;  // Number of work-items per work-group
     const size_t global = ((V + local - 1) / local) * local;
 
     // Setup the range
@@ -501,7 +477,7 @@ void GPURun(int vertexCount,
               // << std::endl;
     // }
 
-    // auto Q1 = sycl::queue{devs[1]}; // [opencl:cpu:1] Intel(R) OpenCL, AMD EPYC 7742 64-Core Processor OpenCL 3.0 (Build 0) [2023.NUMBER_OF_WORKGROUPS.10.0.17_160000]
+    // auto Q1 = sycl::queue{devs[1]}; // [opencl:cpu:1] Intel(R) OpenCL, AMD EPYC 7742 64-Core Processor OpenCL 3.0 (Build 0) [2023.THREADS_PER_BLOCK.10.0.17_160000]
     // auto q = sycl::queue{devs[2]}; //  [ext_oneapi_cuda:gpu:0] NVIDIA CUDA BACKEND, NVIDIA A100-SXM4-40GB 8.0 [CUDA 12.2]
 
     // std::cout << "Running on devices: " << std::endl;
