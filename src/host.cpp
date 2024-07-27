@@ -175,7 +175,7 @@ std::cout << "begin addr : " << source_indptr[135368] << std::endl;
   // Check if iterator is not pointing to the end of vector
   int maxLevelCPU = (*it +2);
 
-  print_levels(host_level,"cpu",h_dist,"fpga",4); // CPU Results
+  print_levels(host_level,"cpu",h_dist,"fpga",maxLevelCPU); // CPU Results
 
 
   return 0;
