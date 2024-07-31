@@ -291,7 +291,7 @@ event parallel_explorer_kernel(queue &q,
             // length = V;
           // length -= gid - lid;
 
-          Uint32 length = (V < gid - lid + blockDim) ? (V - (gid -lid)) : blockDim;
+          // Uint32 length = (V < gid - lid + blockDim) ? (V - (gid -lid)) : blockDim;
     
 
       // printf("blockDim = %d", blockDim);
@@ -318,7 +318,7 @@ event parallel_explorer_kernel(queue &q,
     Uint32 id = std::distance(degrees.begin(), it)-1; // Return the distance minus 1
     
     // if(id < length){
-    Uint32 v = (id < length) ? vertices[id] : -1;              // source
+    Uint32 v = (id < degrees.size()) ? vertices[id] : -1;              // source
     if (v != (Uint32)(-1)){
     // Read from the frontier
     Uint32  e = sedges[id] + i  - degrees[id]; 
@@ -328,9 +328,9 @@ event parallel_explorer_kernel(queue &q,
 // Debug: Print the thread-local th_deg for verification
               
       // if (cond) {
-      if(!Visit[n])
+      if(!Visit[n]){
       VisitMask[n] = 1;
-      // }
+      }
     }
     
       // if(gid == 0)
@@ -553,7 +553,7 @@ void GPURun(int vertexCount,
       copyToHost(q,frontierCountDevice,frontierCountHost);
       // Capture execution times 
       exploreDuration += GetExecutionTime(exploreEvent);
-      levelDuration   += GetExecutionTime(levelEvent);
+      // levelDuration   += GetExecutionTime(levelEvent);
       pipeDuration    += GetExecutionTime(pipeEvent);
       resetDuration   += GetExecutionTime(resetEvent);
       // Increase the level by 1 
