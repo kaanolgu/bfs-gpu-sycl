@@ -1,4 +1,4 @@
-const char* datasetName;
+
 #define SIZE_ONE 1
 
 std::vector<Uint32 > source_meta(SIZE_ONE);
@@ -57,7 +57,7 @@ void readFromMM(const char * fileName,std::vector<Uint32 >&buffer,std::vector<Ui
 
 void loadMatrix(Uint32 partitionCount,	std::vector<Uint32>& old_buffer_size_meta,
 	std::vector<Uint32>& old_buffer_size_indptr,
-	std::vector<Uint32>& old_buffer_size_inds,Uint32 &offset_meta,Uint32 &offset_indptr,Uint32 &offset_inds) {
+	std::vector<Uint32>& old_buffer_size_inds,Uint32 &offset_meta,Uint32 &offset_indptr,Uint32 &offset_inds,std::string datasetName) {
 	// datasetName = rmat-20-32
 	std::cout << "Loading matrix " << datasetName << " with " << partitionCount << " partitions.." << std::endl;  
 	std::string pth = "/dataset/";
