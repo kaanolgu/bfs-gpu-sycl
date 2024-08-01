@@ -1,3 +1,4 @@
+#include <map>
 #define MAX_NUM_CU 4
 // using MyUint1 = ac_int<1, false>;
 #include "unrolled_loop.hpp"
@@ -45,32 +46,66 @@ private:
   std::chrono::steady_clock::time_point start_;
 };
 
-// Convention 
-// CapitalCamelCase - pointer
-
-// class Matrix{
-// public:
-//   unsigned int nodeCount; // number of nodes(vertices)
-//   unsigned int edgeCount; // number of edges(connections)
-//   unsigned int source; // the begining node
-//   std::vector<unsigned int> Offset; // indptr from old convention this stores #totalEdgesforX = rowPointer[x+1] - rowPointer[x]
-//   std::vector<unsigned int> Position; // inds from old convention this stores the data we want colIndices[rowPointer[x]] till colIndices[] 
-//   std::vector<char> VisitMask; // old h_updating_mask for usm_updating_mask (newly generated visited)
-//   std::vector<char> Visit; // old h_visited (old visited data)
-//   std::vector<int>  Distance; // h_dist for distances from source
-//   std::vecotr<unsigned int> Frontier; // 
-//   void Populate(unsigned int s,unsigned int v, unsigned int e,
-//                 std::vector<unsigned int>& source_indptr,std::vector<unsigned int>& source_inds,std::vector<int>& h_dist,std::vector<char> &h_updating_graph_mask,std::vector<char> &h_graph_visited){
-//     source = s;
-//     nodeCount = v;
-//     edgeCount = e;
-//     Offset = source_indptr;
-//     Position = source_inds;
-//     VisitMask = h_updating_graph_mask;
-//     Visit = h_graph_visited;
-//     Distance = h_dist;
 
 
-//   }
-// };
+class CommandLineParser {
+public:
+    // Method to add an argument with a default value
+    void addArgument(const std::string& name, const std::string& defaultValue) {
+        arguments[name] = defaultValue;
+    }
 
+    // Method to parse the command line arguments
+    void parseArguments(int argc, char* argv[]) {
+        for (int i = 1; i < argc; ++i) {
+            std::string arg = argv[i];
+            if (arg.find("--") == 0) {
+                // Handle "--name=value" format
+                auto pos = arg.find('=');
+                if (pos != std::string::npos) {
+                    std::string name = arg.substr(2, pos - 2); // Extract key
+                    std::string value = arg.substr(pos + 1);    // Extract value
+                    std::cout << "key L " << name << ", value = " << value << std::endl;
+                    if (arguments.find(name) != arguments.end()) {
+                        arguments[name] = value;
+                    }
+                } 
+                // Handle "--name value" format
+                else if (i + 1 < argc && argv[i + 1][0] != '-') {
+                    std::string name = arg.substr(2); // Extract key
+                    std::string value = argv[++i]; // Get the next argument as value
+                    std::cout << "key S " << name << ", value = " << value << std::endl;
+                    if (arguments.find(name) != arguments.end()) {
+                        arguments[name] = value;
+                    }
+                } else {
+                    std::cerr << "Warning: No value provided for argument " << arg << std::endl;
+                }
+            }
+        }
+    }
+
+    // Method to get the value of an argument
+    std::string getArgument(const std::string& name) const {
+        auto it = arguments.find(name);
+        if (it != arguments.end()) {
+            return it->second;
+        }
+        return ""; // Return an empty string if the argument is not found
+    }
+
+    // Method to print all arguments in a formatted table
+    void printArguments() const {
+        std::cout << std::setw(20) << std::left << "Argument"
+                  << std::setw(20) << "Value" << std::endl;
+        std::cout << std::string(40, '-') << std::endl;
+
+        for (const auto& pair : arguments) {
+            std::cout << std::setw(20) << std::left << "--" + pair.first
+                      << std::setw(20) << pair.second << std::endl;
+        }
+    }
+
+private:
+    std::map<std::string, std::string> arguments;
+};

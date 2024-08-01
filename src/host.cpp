@@ -87,41 +87,23 @@ std::cout << "level :" << level << " ";
 int main(int argc, char * argv[])
 {
   
-  datasetName = argv[1];  
-  int start_vertex = stoi(argv[2]);
+  CommandLineParser parser;
+  // Register the argument with a default value
+  parser.addArgument("num_runs", "1");
+  parser.addArgument("dataset", "default");
+  parser.addArgument("root", "1");
 
-    // Default value for num_runs
-    int num_runs = 1;
+  // Parse the command line arguments
+  parser.parseArguments(argc, argv);
 
-    // Parse command line arguments
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
-        
-        // Check for "--num_runs=10" format
-        std::string prefix = "--num_runs=";
-        if (arg.find(prefix) == 0) {
-            num_runs = std::stoi(arg.substr(prefix.length()));
-        }
-        // Check for "--num_runs 10" format
-        else if (arg == "--num_runs" && i + 1 < argc) {
-            num_runs = std::stoi(argv[++i]);
-        }
-    }
+  // Get the value of the argument after parsing
+  int num_runs = std::stoi(parser.getArgument("num_runs"));
+  std::string datasetName = parser.getArgument("dataset").c_str();
+  std::cout << datasetName << " a" << std::endl;
+  int start_vertex = stoi(parser.getArgument("root"));
 
-    
-  std::cout <<"------------------------\n"<<
-              "Stage 1: Parse Command Line"<<
-              "--------------------------"<<std::endl;
-  // Output the parsed or default value
-  std::cout << std::endl;
-  // std::cout << "FPGA binary     : " << binaryFile << std::endl;
-  std::cout << "Dataset Name    : " << datasetName << std::endl;
-  std::cout << "Number of runs  : " << num_runs << std::endl;
-  std::cout << "Source Vertex   : " << start_vertex << std::endl;
-  // std::cout << "Dataset size    : " << dataset_size << std::endl;
-  // std::cout << "Root Value      : " << root << std::endl;
-  // std::cout << "Random Min      : " << random_min << std::endl;
-  std::cout << std::endl;
+  parser.printArguments();
+
 
 
 	std::vector<Uint32> old_buffer_size_meta(1,0);
@@ -135,7 +117,7 @@ int main(int argc, char * argv[])
   
   std::cout << "######################LOADING MATRIX#########################" << std::endl;
   loadMatrix(NUM_COMPUTE_UNITS, old_buffer_size_meta, old_buffer_size_indptr, old_buffer_size_inds,
-             offset_meta, offset_indptr, offset_inds);
+             offset_meta, offset_indptr, offset_inds,datasetName);
   std::cout << "#############################################################\n" << std::endl;
   numCols = source_meta[1];  // cols -> total number of vertices
   std::cout << "number of vertices "<< numCols << std::endl;
