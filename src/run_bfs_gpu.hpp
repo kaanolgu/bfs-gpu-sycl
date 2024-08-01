@@ -322,8 +322,8 @@ event parallel_explorer_kernel(queue &q,
     Uint32 id = std::distance(degrees.begin(), it)-1; // Return the distance minus 1
     
     // if(id < length){
-    Uint32 v = (id < degrees.size()) ? vertices[id] : -1;              // source
-    if (v != (Uint32)(-1)){
+    // Uint32 v =  ? vertices[id] : -1;              // source
+    // if ((id < degrees.size())){
     // Read from the frontier
     Uint32  e = sedges[id] + i  - degrees[id]; 
     Uint32  n  = Edges[e];   
@@ -332,10 +332,10 @@ event parallel_explorer_kernel(queue &q,
 // Debug: Print the thread-local th_deg for verification
               
       // if (cond) {
-      if(!Visit[n]){
+      if(!Visit[n] && (id < degrees.size())){
       VisitMask[n] = 1;
       }
-    }
+    // }
     
       // if(gid == 0)
     // printf("i: %d, it = %d, l=%d id = %d, v = %d, e = %d, n = %d, offset[0] = %lu\n", i, it,length,id,v,e,n,OOffset[0]);
@@ -357,7 +357,9 @@ event parallel_levelgen_kernel(queue &q,
                                 Uint32 *Distance,
                                 MyUint1 *VisitMask,
                                 MyUint1 *Visit,
-                                int iteration
+                                int iteration,
+                                Uint32 *Frontier,
+                                Uint32 *frontierCount
                                  ){
    // Define the work-group size and the number of work-groups
     const size_t local = THREADS_PER_BLOCK;  // Number of work-items per work-group
@@ -367,10 +369,16 @@ event parallel_levelgen_kernel(queue &q,
     nd_range<1> range(global, local);
         auto e = q.parallel_for<class LevelGenerator>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
           int gid = item.get_global_id();
+              sycl::atomic_ref<Uint32, sycl::memory_order_relaxed,
+          sycl::memory_scope_device,sycl::access::address_space::global_space>
+          atomic_op_global(frontierCount[0]);
+
           if (gid < V) {
             if(VisitMask[gid]){
               Distance[gid] = iteration+1;
               Visit[gid]=1;
+              Frontier[atomic_op_global.fetch_add(1)] = gid;
+              VisitMask[gid]=0;  
            }
           }
         });
@@ -399,15 +407,13 @@ event pipegen_kernel(queue &q,
         auto e = q.parallel_for<class PipeGenerator>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
           int gid = item.get_global_id();
           
-          sycl::atomic_ref<Uint32, sycl::memory_order_relaxed,
-          sycl::memory_scope_device,sycl::access::address_space::global_space>
-          atomic_op_global(frontierCount[0]);
+      
           // TODO
           // blockscan here to findd the total elements to insert frontier
           // then another grid-stride loop to write frontier 
           if (gid < V) {
               if(VisitMask[gid]){
-                Frontier[atomic_op_global.fetch_add(1)] = gid;
+                
               }
             
             } 
@@ -548,22 +554,22 @@ void GPURun(int vertexCount,
       exploreEvent = parallel_explorer_kernel<1>(q,frontierCountHost[0],iteration,OffsetDevice,EdgesDevice,FrontierDevice,frontierCountDevice, VisitMaskDevice,DistanceDevice,VisitDevice);
       q.wait();
       // Level Generate
-      levelEvent =parallel_levelgen_kernel(q,vertexCount,DistanceDevice,VisitMaskDevice,VisitDevice,iteration);
-      pipeEvent =pipegen_kernel(q,vertexCount,FrontierDevice, frontierCountDevice,VisitMaskDevice);
+      levelEvent =parallel_levelgen_kernel(q,vertexCount,DistanceDevice,VisitMaskDevice,VisitDevice,iteration,FrontierDevice,frontierCountDevice);
+      // pipeEvent =pipegen_kernel(q,vertexCount,FrontierDevice, frontierCountDevice,VisitMaskDevice);
       q.wait();
-      resetEvent =maskremove_kernel(q,vertexCount,VisitMaskDevice);             
-      q.wait();
+      // resetEvent =maskremove_kernel(q,vertexCount,VisitMaskDevice);             
+      // q.wait();
       copyToHost(q,frontierCountDevice,frontierCountHost);
       // Capture execution times 
       exploreDuration += GetExecutionTime(exploreEvent);
       levelDuration   += GetExecutionTime(levelEvent);
-      pipeDuration    += GetExecutionTime(pipeEvent);
-      resetDuration   += GetExecutionTime(resetEvent);
+      // pipeDuration    += GetExecutionTime(pipeEvent);
+      // resetDuration   += GetExecutionTime(resetEvent);
       // Increase the level by 1 
       if(iteration == 0)
       start_time = exploreEvent.get_profiling_info<info::event_profiling::command_start>();
     }
-      end_time = resetEvent.get_profiling_info<info::event_profiling::command_end>();
+      end_time = levelEvent.get_profiling_info<info::event_profiling::command_end>();
       
 
 
