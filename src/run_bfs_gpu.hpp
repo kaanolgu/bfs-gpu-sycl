@@ -463,7 +463,7 @@ void GPURun(int vertexCount,
                   std::vector<MyUint1> &VisitMaskHost,
                   std::vector<MyUint1> &VisitHost,
                   std::vector<Uint32> &DistanceHost,
-                  int sourceNode,int edgeCount) noexcept(false) {
+                  int sourceNode,int edgeCount,const int num_runs) noexcept(false) {
  
 
   // Select either:
@@ -507,29 +507,21 @@ void GPURun(int vertexCount,
     // Print out the device information.
     std::cout << "Running on device: "
               << q.get_device().get_info<info::device::name>() << "\n";
-    std::vector<Uint32> FrontierHost(vertexCount,0);
-    FrontierHost[0] = sourceNode;
+
     // FrontierHost[1] = 87;
 
 
     Uint32* OffsetDevice      = malloc_device<Uint32>(OffsetHost.size(), q);
-    Uint32 *DistanceDevice    = malloc_device<Uint32>(DistanceHost.size(), q); 
-    MyUint1 *VisitMaskDevice  = malloc_device<MyUint1>(VisitMaskHost.size(), q); 
-    MyUint1 *VisitDevice      = malloc_device<MyUint1>(VisitHost.size(), q); 
+  
     Uint32 *EdgesDevice       = malloc_device<Uint32>(IndexHost.size(), q); 
-    Uint32 *FrontierDevice    = malloc_device<Uint32>(FrontierHost.size(), q); 
 
 
     copyToDevice(q,IndexHost,EdgesDevice);
     copyToDevice(q,OffsetHost,OffsetDevice);
-    copyToDevice(q,DistanceHost,DistanceDevice);
-    copyToDevice(q,VisitMaskHost,VisitMaskDevice);
-    copyToDevice(q,VisitHost,VisitDevice);
-    copyToDevice(q,FrontierHost,FrontierDevice);
 
-    // We will have a single eflement int the pipe which is source vertex
-    std::vector<Uint32> frontierCountHost(1,1);
-    Uint32 *frontierCountDevice = malloc_device<Uint32>(1, q);
+ 
+
+
 
 
 
@@ -540,9 +532,23 @@ void GPURun(int vertexCount,
     double pipeDuration=0,resetDuration=0;
 
 
-
-
+    std::vector<std::vector<Uint32>> distances(num_runs,DistanceHost);
+    std::vector<double> run_times(num_runs,0);
     int zero = 0;
+    for(int i =0; i < num_runs; i++){
+              std::vector<Uint32> FrontierHost(vertexCount,0);
+    FrontierHost[0] = sourceNode;
+    Uint32 *FrontierDevice    = malloc_device<Uint32>(FrontierHost.size(), q); 
+   copyToDevice(q,FrontierHost,FrontierDevice);
+    // We will have a single eflement int the pipe which is source vertex
+    std::vector<Uint32> frontierCountHost(1,1);
+    Uint32 *frontierCountDevice = malloc_device<Uint32>(1, q);
+      Uint32 *DistanceDevice    = malloc_device<Uint32>(DistanceHost.size(), q); 
+    MyUint1 *VisitMaskDevice  = malloc_device<MyUint1>(VisitMaskHost.size(), q); 
+    MyUint1 *VisitDevice      = malloc_device<MyUint1>(VisitHost.size(), q); 
+    copyToDevice(q,distances[i],DistanceDevice);
+    copyToDevice(q,VisitMaskHost,VisitMaskDevice);
+    copyToDevice(q,VisitHost,VisitDevice);
     double start_time = 0;
     double end_time = 0;
     for(int iteration=0; iteration < MAX_NUM_LEVELS; iteration++){
@@ -570,23 +576,48 @@ void GPURun(int vertexCount,
       start_time = exploreEvent.get_profiling_info<info::event_profiling::command_start>();
     }
       end_time = levelEvent.get_profiling_info<info::event_profiling::command_end>();
+      double total_time = (end_time - start_time)* 1e-6; // ns to ms
+      run_times[i] = total_time;
+      copyToHost(q,DistanceDevice,distances[i]);
       
 
-
-
+    } // for loop num_runs
 
     // copy VisitDevice back to hostArray
     // q.memcpy(&DistanceHost[0], DistanceDevice, DistanceHost.size() * sizeof(int));
-    copyToHost(q,DistanceDevice,DistanceHost);
+    // copyToHost(q,DistanceDevice,DistanceHost);
     q.wait();
+     DistanceHost = distances[num_runs-1];
     // sycl::free(OffsetDevice, q);
     // sycl::free(usm_nodes_end, q);
     // sycl::free(EdgesDevice, q);
-    sycl::free(DistanceDevice, q);
-    sycl::free(VisitDevice, q);
+    // sycl::free(DistanceDevice, q);
+    // sycl::free(VisitDevice, q);
     // sycl::free(VisitMaskDevice, q);
     // sycl::free(usm_mask, q);
- 
+    // Check if each distances[i] is equal to DistanceHost
+    bool all_match_host = true;
+    for(int i =0; i < num_runs; i++){
+      if (!std::equal(distances[i].begin(), distances[i].end(), DistanceHost.begin())) {
+            all_match_host = false;
+            std::cout << "distances[" << i << "] does not match DistanceHost.\n";
+        }
+    }
+     if (all_match_host) {
+        std::cout << "All distances vectors match DistanceHost.\n";
+    }
+
+
+    // Check if all distances[i] vectors are identical
+    bool all_identical = std::all_of(distances.begin(), distances.end(), 
+                                      [&](const std::vector<Uint32>& vec) {
+                                          return vec == distances[0];
+                                      });
+    if (all_identical) {
+        std::cout << "All distances vectors are identical.\n";
+    } else {
+        std::cout << "Not all distances vectors are identical.\n";
+    }
 
     const char separator    = ' ';
     const int nameWidth     = 24;
@@ -598,8 +629,9 @@ void GPURun(int vertexCount,
          "|-------------------------+-------------------------|\n"
          "| Kernel                  |    Wall-Clock Time (ns) |\n"
          "|-------------------------+-------------------------|\n",vertexCount,edgeCount);
+         for(int i =0; i < num_runs;i++)std::cout << run_times[i] << std::endl;
 
-  double total_time = (end_time - start_time)* 1e-6; // ns to ms
+  double total_time =std::accumulate(run_times.begin(), run_times.end(), 0.0) / run_times.size();
 
   std::cout << "| " << std::left << std::setw(nameWidth) << std::setfill(separator) << " exploreEvent  : " << "| " << std::setw(numWidth) << std::setfill(separator)  << std::to_string(exploreDuration*1000) + " (ms) " << "| " << std::endl;
   printf("|-------------------------+-------------------------|\n");

@@ -88,8 +88,41 @@ int main(int argc, char * argv[])
 {
   
   datasetName = argv[1];  
-
   int start_vertex = stoi(argv[2]);
+
+    // Default value for num_runs
+    int num_runs = 1;
+
+    // Parse command line arguments
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        
+        // Check for "--num_runs=10" format
+        std::string prefix = "--num_runs=";
+        if (arg.find(prefix) == 0) {
+            num_runs = std::stoi(arg.substr(prefix.length()));
+        }
+        // Check for "--num_runs 10" format
+        else if (arg == "--num_runs" && i + 1 < argc) {
+            num_runs = std::stoi(argv[++i]);
+        }
+    }
+
+    
+  std::cout <<"------------------------\n"<<
+              "Stage 1: Parse Command Line"<<
+              "--------------------------"<<std::endl;
+  // Output the parsed or default value
+  std::cout << std::endl;
+  // std::cout << "FPGA binary     : " << binaryFile << std::endl;
+  std::cout << "Dataset Name    : " << datasetName << std::endl;
+  std::cout << "Number of runs  : " << num_runs << std::endl;
+  std::cout << "Source Vertex   : " << start_vertex << std::endl;
+  // std::cout << "Dataset size    : " << dataset_size << std::endl;
+  // std::cout << "Root Value      : " << root << std::endl;
+  // std::cout << "Random Min      : " << random_min << std::endl;
+  std::cout << std::endl;
+
 
 	std::vector<Uint32> old_buffer_size_meta(1,0);
 	std::vector<Uint32> old_buffer_size_indptr(1,0);
@@ -153,8 +186,9 @@ std::cout << "begin addr : " << source_indptr[135368] << std::endl;
                   h_updating_graph_mask,
                   h_graph_visited,
                   h_dist,
-                  start_vertex,numEdges);  
-  std::cout << "number of vertices "<< numCols << std::endl;
+                  start_vertex,numEdges,
+                  num_runs);  
+
 
   // initalize the memory again
   std::vector<Uint32> host_graph_mask(numCols,0);
