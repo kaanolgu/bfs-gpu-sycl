@@ -9,6 +9,8 @@ using namespace sycl;
 #include <bitset>
 #include "functions.hpp"
 
+#define MAX_NUM_LEVELS 100
+
 // Intel Compatibility Tool (aka c2s)
 // #include <dpct/dpct.hpp>
 // #include <dpct/rng_utils.hpp>
@@ -63,6 +65,8 @@ void copyToHost(queue &Q, T *usm_arr,std::vector<T> &arr){
 //-------------------------------------------------------------------
 // Return the execution time of the event, in seconds
 //-------------------------------------------------------------------
+
+
 double GetExecutionTime(const event &e) {
   double start_k = e.get_profiling_info<info::event_profiling::command_start>();
   double end_k = e.get_profiling_info<info::event_profiling::command_end>();
@@ -361,7 +365,6 @@ event parallel_levelgen_kernel(queue &q,
 
     // Setup the range
     nd_range<1> range(global, local);
-
         auto e = q.parallel_for<class LevelGenerator>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
           int gid = item.get_global_id();
           if (gid < V) {
@@ -370,7 +373,6 @@ event parallel_levelgen_kernel(queue &q,
               Visit[gid]=1;
            }
           }
-
         });
 
 return e;
@@ -535,8 +537,9 @@ void GPURun(int vertexCount,
 
 
     int zero = 0;
-
-    for(int iteration=0; iteration < 100; iteration++){
+    double start_time = 0;
+    double end_time = 0;
+    for(int iteration=0; iteration < MAX_NUM_LEVELS; iteration++){
       if(frontierCountHost[0] == 0){
         std::cout << "total number of iterations" << iteration << "\n";
         break;
@@ -553,12 +556,17 @@ void GPURun(int vertexCount,
       copyToHost(q,frontierCountDevice,frontierCountHost);
       // Capture execution times 
       exploreDuration += GetExecutionTime(exploreEvent);
-      // levelDuration   += GetExecutionTime(levelEvent);
+      levelDuration   += GetExecutionTime(levelEvent);
       pipeDuration    += GetExecutionTime(pipeEvent);
       resetDuration   += GetExecutionTime(resetEvent);
       // Increase the level by 1 
-
+      if(iteration == 0)
+      start_time = exploreEvent.get_profiling_info<info::event_profiling::command_start>();
     }
+      end_time = resetEvent.get_profiling_info<info::event_profiling::command_end>();
+      
+
+
 
 
     // copy VisitDevice back to hostArray
@@ -585,7 +593,7 @@ void GPURun(int vertexCount,
          "| Kernel                  |    Wall-Clock Time (ns) |\n"
          "|-------------------------+-------------------------|\n",vertexCount,edgeCount);
 
-  double totalDuration = exploreDuration + max(levelDuration,pipeDuration) +  resetDuration; // in seconds
+  double total_time = (end_time - start_time)* 1e-6; // ns to ms
 
   std::cout << "| " << std::left << std::setw(nameWidth) << std::setfill(separator) << " exploreEvent  : " << "| " << std::setw(numWidth) << std::setfill(separator)  << std::to_string(exploreDuration*1000) + " (ms) " << "| " << std::endl;
   printf("|-------------------------+-------------------------|\n");
@@ -594,8 +602,8 @@ void GPURun(int vertexCount,
   printf("|-------------------------+-------------------------|\n");
   std::cout << "| " << std::left << std::setw(nameWidth) << std::setfill(separator) << " resetEvent  : " << "| " << std::setw(numWidth) << std::setfill(separator)  << std::to_string(resetDuration*1000) + " (ms) " << "| " << std::endl;
   printf("|-------------------------+-------------------------|\n");
-  std::cout << "| " << std::left << std::setw(nameWidth) << std::setfill(separator) << " Total Execution Time  :" << "| " << std::setw(numWidth) << std::setfill(separator)  << std::to_string(totalDuration*1000) + " (ms) "<< "| "  << std::endl;
-  std::cout << "| " << std::left << std::setw(nameWidth) << std::setfill(separator) << " Throughput = "         << "| " << std::setw(numWidth) << std::setfill(separator)  << std::to_string((edgeCount/(1000000*totalDuration))) + " (MTEPS)" << "| " << std::endl;;
+  std::cout << "| " << std::left << std::setw(nameWidth) << std::setfill(separator) << " Total Execution Time  :" << "| " << std::setw(numWidth) << std::setfill(separator)  << std::to_string(total_time) + " (ms) "<< "| "  << std::endl;
+  std::cout << "| " << std::left << std::setw(nameWidth) << std::setfill(separator) << " Throughput = "         << "| " << std::setw(numWidth) << std::setfill(separator)  << std::to_string((edgeCount/(1000000*total_time*1e-3))) + " (MTEPS)" << "| " << std::endl;;
   printf("|-------------------------+-------------------------|\n");
 
 
