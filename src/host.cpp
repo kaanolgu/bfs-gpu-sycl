@@ -73,7 +73,7 @@ std::cout << "level :" << level << " ";
         }
         if(B[i] != level){
           if(A[i] == level){
-              std::cout << i << "[" << B[i] << "], ";
+              // std::cout << i << "[" << B[i] << "], ";
           }
         }
     }

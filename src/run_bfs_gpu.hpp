@@ -139,48 +139,6 @@ event parallel_explorer_kernel(queue &q,
     const size_t global = ((V + local - 1) / local) * local;
     // int ncus = q.get_device().get_info<info::device::max_compute_units>();
 
-    auto search = [Distance, iteration](
-                      Uint32 const& source,    // ... source
-                      Uint32 const& neighbor,  // neighbor
-                      Uint32 const& edge        // edge
-                      ) -> bool {
-      // If the neighbor is not visited, update the distance. Returning false
-      // here means that the neighbor is not added to the output frontier, and
-      // instead an invalid vertex is added in its place. These invalides (-1 in
-      // most cases) can be removed using a filter operator or uniquify.
-
-      // if (distances[neighbor] != std::numeric_limits<vertex_t>::max())
-      //   return false;
-      // else
-      //   return (math::atomic::cas(
-      //               &distances[neighbor],
-      //               std::numeric_limits<vertex_t>::max(), iteration + 1) ==
-      //               std::numeric_limits<vertex_t>::max());
-
-      // Simpler logic for the above.
-      // auto old_distance =
-      //     math::atomic::min(&Distance[neighbor], iteration + 1);
-
-      Uint32 old_distance = sycl::atomic_ref<Uint32, 
-                               memory_order::acq_rel, 
-                               memory_scope::device, 
-                               access::address_space::global_space>(Distance[neighbor])
-                        .fetch_min(iteration+1);
-      // auto old_visit_status = Visit[neighbor];
-      if(iteration+1 < old_distance){
-        if(old_distance != -1){
-          printf("neigh: %d, iter : %d, old_dist: %d\n",neighbor,iteration+1,old_distance );
-        }
-      }
-      
-      return (iteration+1 < old_distance);
-      // return (!old_visit_status);
-    };
-
-
-
-
-
 
 
 
@@ -191,7 +149,7 @@ event parallel_explorer_kernel(queue &q,
     // Uint32 *vertices = malloc_device<Uint32>(256, q);
     // std::vector<Uint32> vertices_a(256,0);
     Uint32 *block_offsets = malloc_device<Uint32>(1, q);
-    unsigned long *OOffset = malloc_device<unsigned long>(1, q);
+    
 
 
 
@@ -367,22 +325,96 @@ event parallel_levelgen_kernel(queue &q,
 
     // Setup the range
     nd_range<1> range(global, local);
-        auto e = q.parallel_for<class LevelGenerator>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
-          int gid = item.get_global_id();
-              sycl::atomic_ref<Uint32, sycl::memory_order_relaxed,
-          sycl::memory_scope_device,sycl::access::address_space::global_space>
-          atomic_op_global(frontierCount[0]);
+        auto e = q.submit([&](handler& h) {
+          // Local memory for exclusive sum, shared within the work-group
+          // sycl::local_accessor<int> localVisitMask(local, h);
+          sycl::local_accessor<int> local_sum(local, h);
+          sycl::local_accessor<int> local_sum2(local, h);
+          sycl::local_accessor<int> local_counter(local, h);
+                    sycl::local_accessor<Uint32> degrees(local, h);
+                    sycl::local_accessor<Uint32> vertices(local, h);
+          // sycl::local_accessor<int> local_counter(1, h);
+        h.parallel_for<class LevelGen>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
+          const int gid = item.get_global_id(0);    // global id
+          const int lid  = item.get_local_id(0); // threadIdx.x
+          const int blockIdx  = item.get_group(0); // blockIdx.x
+          const int gridDim   = item.get_group_range(0); // gridDim.x
+          const int blockDim  = item.get_local_range(0); // blockDim.x
 
-          if (gid < V) {
-            if(VisitMask[gid]){
-              Distance[gid] = iteration+1;
-              Visit[gid]=1;
-              Frontier[atomic_op_global.fetch_add(1)] = gid;
-              VisitMask[gid]=0;  
-           }
-          }
+
+    // Load a chunk of VisitMask into local memory
+        if (gid < V) {
+            MyUint1 vmask = VisitMask[gid];
+            if(vmask == 1){
+                Visit[gid] = 1;
+                local_counter[lid] = 1;
+                vertices[lid] = gid;
+            }else{
+              vertices[lid] = -1;
+              local_counter[lid] = 0;
+            }
+            
+        }else{
+          vertices[lid] = -1;
+          local_counter[lid] = 0;
+        }
+        group_barrier(item.get_group());
+
+
+
+
+            Uint32 th_deg = local_counter[lid];
+            //  aggregate_degree_per_block;
+ 
+           /// 2. Exclusive sum of degrees to find total work items per block.
+             th_deg = sycl::exclusive_scan_over_group(item.get_group(), th_deg, sycl::plus<>());
+
+            local_sum[lid] = th_deg;
+
+            if(lid == blockDim -1)
+            th_deg +=local_counter[lid];
+            
+            local_sum2[lid] = th_deg;
+            sycl::group_barrier(item.get_group());
+
+            unsigned int aggregate_degree_per_block =  local_sum2[blockDim - 1];
+            degrees[lid] = local_sum[lid];
+        /// 3. Compute block offsets if there's an output frontier.
+          group_barrier(item.get_group());
+            // Define the atomic operation reference outside the loop
+          // printf("vertices = %d, lid = %d, degrees[lid] = %d, agg = %d\n", vertices[lid],lid, degrees[lid], aggregate_degree_per_block);
+
+          for (int i = lid;            // threadIdx.x
+       i < aggregate_degree_per_block;  // total degree to process
+       i += blockDim    // increment by blockDim.x
+  ) {  
+
+         auto it = std::upper_bound(degrees.begin(),degrees.end(), i);
+      // int id = std::distance(degrees, it) - 1;
+    Uint32 id = std::distance(degrees.begin(), it)-1; // Return the distance minus 1
+    if(id < degrees.size()){
+            Uint32 v = vertices[id];
+                Distance[v] = iteration + 1;  
+                
+                
+                // Use atomic operation to update the global Frontier array
+                // sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,
+                //     sycl::memory_scope::device, 
+                //     sycl::access::address_space::global_space> atomic_op_global(frontierCount[0]);
+
+                // Use atomic operation to update the global Frontier array
+                sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,
+            sycl::memory_scope::device, 
+            sycl::access::address_space::global_space> atomic_op_global(frontierCount[0]);
+            if(local_counter[id]){
+                Frontier[atomic_op_global.fetch_add(1)] = v;
+                VisitMask[v]=0;
+            }
+    }
+  }
+        // group_barrier(item.get_group());
         });
-
+        });
 return e;
 }
 
@@ -406,14 +438,17 @@ event pipegen_kernel(queue &q,
 
         auto e = q.parallel_for<class PipeGenerator>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
           int gid = item.get_global_id();
-          
+          sycl::atomic_ref<Uint32, sycl::memory_order_relaxed,
+          sycl::memory_scope_device,sycl::access::address_space::global_space>
+          atomic_op_global(frontierCount[0]);
       
           // TODO
           // blockscan here to findd the total elements to insert frontier
           // then another grid-stride loop to write frontier 
           if (gid < V) {
               if(VisitMask[gid]){
-                
+                // Frontier[atomic_op_global.fetch_add(1)] = gid;
+                VisitMask[gid]=0;
               }
             
             } 
@@ -561,8 +596,9 @@ void GPURun(int vertexCount,
       q.wait();
       // Level Generate
       levelEvent =parallel_levelgen_kernel(q,vertexCount,DistanceDevice,VisitMaskDevice,VisitDevice,iteration,FrontierDevice,frontierCountDevice);
-      // pipeEvent =pipegen_kernel(q,vertexCount,FrontierDevice, frontierCountDevice,VisitMaskDevice);
       q.wait();
+      // pipeEvent =pipegen_kernel(q,vertexCount,FrontierDevice, frontierCountDevice,VisitMaskDevice);
+      // q.wait();
       // resetEvent =maskremove_kernel(q,vertexCount,VisitMaskDevice);             
       // q.wait();
       copyToHost(q,frontierCountDevice,frontierCountHost);
