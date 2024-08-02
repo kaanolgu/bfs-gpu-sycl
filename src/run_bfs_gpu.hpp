@@ -102,20 +102,20 @@ double GetExecutionTime(const event &e) {
 // return (iteration + 1 < old_distance);
 //     };
 
-// template <typename T>
-// int upper_bound(const sycl::local_accessor<T> &arr, int n, int value) {
-//     int start = 0;
-//     int i;
-//     while (start < n) {
-//         i = start + (n - start) / 2;
-//         if (value < arr[i]) {
-//             n = i;
-//         } else {
-//             start = i + 1;
-//         }
-//     } // end while
-//     return start;
-// }
+template <typename T>
+int upper_bound(const sycl::local_accessor<T> &arr, int n, int value) {
+    int start = 0;
+    int i;
+    while (start < n) {
+        i = start + (n - start) / 2;
+        if (value < arr[i]) {
+            n = i;
+        } else {
+            start = i + 1;
+        }
+    } // end while
+    return start;
+}
 
 //-------------------------------------------------------------------
 //-- initialize Kernel for Exploring the neighbours of next to visit 
@@ -180,10 +180,10 @@ event parallel_explorer_kernel(queue &q,
 
         auto e = q.submit([&](handler& h) {
           // Local memory for exclusive sum, shared within the work-group
-          sycl::local_accessor<int> local_sum(local, h);
-          sycl::local_accessor<int> local_sum2(local, h);
-          sycl::local_accessor<Uint32> local_th_deg(local, h);
-          sycl::local_accessor<Uint32> vertices(local, h);
+          // sycl::local_accessor<int> local_sum(local, h);
+          // sycl::local_accessor<int> local_sum2(local, h);
+          // sycl::local_accessor<Uint32> local_th_deg(local, h);
+          // sycl::local_accessor<Uint32> vertices(local, h);
           sycl::local_accessor<Uint32> sedges(local, h);
           sycl::local_accessor<Uint32> degrees(local, h);
         h.parallel_for<class ExploreNeighbours>(range, [=](nd_item<1> item) {
@@ -192,41 +192,45 @@ event parallel_explorer_kernel(queue &q,
           const int blockIdx  = item.get_group(0); // blockIdx.x
           const int gridDim   = item.get_group_range(0); // gridDim.x
           const int blockDim  = item.get_local_range(0); // blockDim.x
-          // Uint32 th_deg[ITEMS_PER_THREAD]; // this variable is shared between workitems
+          Uint32 local_th_deg[ITEMS_PER_THREAD]; // this variable is shared between workitems
+          Uint32  vertex;
+          Uint32  sedge;
+          Uint32  degree;
         // this variable will be instantiated for each work-item separately
 
             if (gid < V) {
                 Uint32 v = Frontier[gid];
-                vertices[lid] = v;
+                // vertices[lid] = v;
                 
                 if (v != -1) {
                     sedges[lid] = usm_nodes_start[v];
-                    local_th_deg[lid] =usm_nodes_start[v+1] - usm_nodes_start[v];
+                    local_th_deg[0] =usm_nodes_start[v+1] - usm_nodes_start[v];
                 } else {
-                    local_th_deg[lid] = 0;
+                    local_th_deg[0] = 0;
                 }
             }
             else {
-                vertices[lid] = -1;
-                local_th_deg[lid] = 0;
+                // vertices[lid] = -1;
+                local_th_deg[0] = 0;
             }
         
           sycl::group_barrier(item.get_group());
-            Uint32 th_deg = local_th_deg[lid];
+            Uint32 th_deg;
+            Uint32 aggregate_degree_per_block;
             //  aggregate_degree_per_block;
  
            /// 2. Exclusive sum of degrees to find total work items per block.
-             th_deg = sycl::exclusive_scan_over_group(item.get_group(), th_deg, sycl::plus<>());
+            th_deg = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg[0], sycl::plus<>());
+            aggregate_degree_per_block = reduce_over_group(item.get_group(), local_th_deg[0], sycl::plus<>());
+            // local_sum[lid] = ;
 
-            local_sum[lid] = th_deg;
-
-            if(lid == blockDim -1)
-            th_deg +=local_th_deg[lid];
-            
-            local_sum2[lid] = th_deg;
+            // if(lid == blockDim -1)
+            // th_deg +=local_th_deg[lid];
+            degrees[lid] = th_deg;
+            // local_sum2[lid] = th_deg;
             sycl::group_barrier(item.get_group());
 
-            unsigned int aggregate_degree_per_block =  local_sum2[blockDim - 1];
+            // unsigned int aggregate_degree_per_block =  local_sum2[blockDim - 1];
 
             
             // aggregate_degree_per_block += local_th_deg[lid];
@@ -235,7 +239,7 @@ event parallel_explorer_kernel(queue &q,
           
             // if((lid == blockDim -1))
               // aggregate_degree_per_block += original_th_deg;
-              degrees[lid] = local_sum[lid];
+              
         /// 3. Compute block offsets if there's an output frontier.
           // group_barrier(item.get_group());
           // if(lid == 0){
@@ -245,15 +249,14 @@ event parallel_explorer_kernel(queue &q,
           //           OOffset[0] = atomic_ref.fetch_add(aggregate_degree_per_block);
           // }
           
-          group_barrier(item.get_group());
-
+      
 
           // auto length = gid - lid + blockDim;
           // if (V < length)
             // length = V;
           // length -= gid - lid;
 
-          // Uint32 length = (V < gid - lid + blockDim) ? (V - (gid -lid)) : blockDim;
+          Uint32 length = (V < gid - lid + blockDim) ? (V - (gid -lid)) : blockDim;
     
 
       // printf("blockDim = %d", blockDim);
@@ -275,9 +278,9 @@ event parallel_explorer_kernel(queue &q,
   /// resultant neighbor or invalid vertex is written to the output frontier.
     // Implement a simple upper_bound algorithm for use in SYCL
   
-     auto it = std::upper_bound(degrees.begin(),degrees.end(), i);
-      // int id = std::distance(degrees, it) - 1;
-    Uint32 id = std::distance(degrees.begin(), it)-1; // Return the distance minus 1
+     auto it = upper_bound(degrees,length, i);
+      int id =  it - 1;
+    // Uint32 id = std::distance(degrees.begin(), it)-1; // Return the distance minus 1
     
     // if(id < length){
     // Uint32 v =  ? vertices[id] : -1;              // source
@@ -290,7 +293,7 @@ event parallel_explorer_kernel(queue &q,
 // Debug: Print the thread-local th_deg for verification
               
       // if (cond) {
-      if(!Visit[n] && (id < degrees.size())){
+      if(!Visit[n]){
       VisitMask[n] = 1;
       }
     // }
@@ -328,11 +331,11 @@ event parallel_levelgen_kernel(queue &q,
         auto e = q.submit([&](handler& h) {
           // Local memory for exclusive sum, shared within the work-group
           // sycl::local_accessor<int> localVisitMask(local, h);
-          sycl::local_accessor<int> local_sum(local, h);
-          sycl::local_accessor<int> local_sum2(local, h);
-          sycl::local_accessor<int> local_counter(local, h);
-                    sycl::local_accessor<Uint32> degrees(local, h);
-                    sycl::local_accessor<Uint32> vertices(local, h);
+          // sycl::local_accessor<int> local_sum(local, h);
+          // sycl::local_accessor<int> local_sum2(local, h);
+          // sycl::local_accessor<int> local_counter(local, h);
+                    // sycl::local_accessor<Uint32> degrees(local, h);
+                    // sycl::local_accessor<Uint32> vertices(local, h);
           // sycl::local_accessor<int> local_counter(1, h);
         h.parallel_for<class LevelGen>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
           const int gid = item.get_global_id(0);    // global id
@@ -346,71 +349,80 @@ event parallel_levelgen_kernel(queue &q,
         if (gid < V) {
             MyUint1 vmask = VisitMask[gid];
             if(vmask == 1){
+              Distance[gid] = iteration + 1;  
                 Visit[gid] = 1;
-                local_counter[lid] = 1;
-                vertices[lid] = gid;
-            }else{
-              vertices[lid] = -1;
-              local_counter[lid] = 0;
-            }
-            
-        }else{
-          vertices[lid] = -1;
-          local_counter[lid] = 0;
-        }
-        group_barrier(item.get_group());
-
-
-
-
-            Uint32 th_deg = local_counter[lid];
-            //  aggregate_degree_per_block;
- 
-           /// 2. Exclusive sum of degrees to find total work items per block.
-             th_deg = sycl::exclusive_scan_over_group(item.get_group(), th_deg, sycl::plus<>());
-
-            local_sum[lid] = th_deg;
-
-            if(lid == blockDim -1)
-            th_deg +=local_counter[lid];
-            
-            local_sum2[lid] = th_deg;
-            sycl::group_barrier(item.get_group());
-
-            unsigned int aggregate_degree_per_block =  local_sum2[blockDim - 1];
-            degrees[lid] = local_sum[lid];
-        /// 3. Compute block offsets if there's an output frontier.
-          group_barrier(item.get_group());
-            // Define the atomic operation reference outside the loop
-          // printf("vertices = %d, lid = %d, degrees[lid] = %d, agg = %d\n", vertices[lid],lid, degrees[lid], aggregate_degree_per_block);
-
-          for (int i = lid;            // threadIdx.x
-       i < aggregate_degree_per_block;  // total degree to process
-       i += blockDim    // increment by blockDim.x
-  ) {  
-
-         auto it = std::upper_bound(degrees.begin(),degrees.end(), i);
-      // int id = std::distance(degrees, it) - 1;
-    Uint32 id = std::distance(degrees.begin(), it)-1; // Return the distance minus 1
-    if(id < degrees.size()){
-            Uint32 v = vertices[id];
-                Distance[v] = iteration + 1;  
-                
-                
-                // Use atomic operation to update the global Frontier array
-                // sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,
-                //     sycl::memory_scope::device, 
-                //     sycl::access::address_space::global_space> atomic_op_global(frontierCount[0]);
-
-                // Use atomic operation to update the global Frontier array
-                sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,
+                                sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,
             sycl::memory_scope::device, 
             sycl::access::address_space::global_space> atomic_op_global(frontierCount[0]);
-            if(local_counter[id]){
-                Frontier[atomic_op_global.fetch_add(1)] = v;
-                VisitMask[v]=0;
+            
+                Frontier[atomic_op_global.fetch_add(1)] = gid;
+                VisitMask[gid]=0;
+            
+                // local_counter[lid] = 1;
+                // vertices[lid] = gid;
             }
-    }
+  //           else{
+  //             vertices[lid] = -1;
+  //             local_counter[lid] = 0;
+  //           }
+            
+  //       }else{
+  //         vertices[lid] = -1;
+  //         local_counter[lid] = 0;
+  //       }
+  //       group_barrier(item.get_group());
+
+
+
+
+  //           Uint32 th_deg = local_counter[lid];
+  //           //  aggregate_degree_per_block;
+ 
+  //          /// 2. Exclusive sum of degrees to find total work items per block.
+  //            th_deg = sycl::exclusive_scan_over_group(item.get_group(), th_deg, sycl::plus<>());
+
+  //           local_sum[lid] = th_deg;
+
+  //           if(lid == blockDim -1)
+  //           th_deg +=local_counter[lid];
+            
+  //           local_sum2[lid] = th_deg;
+  //           sycl::group_barrier(item.get_group());
+
+  //           unsigned int aggregate_degree_per_block =  local_sum2[blockDim - 1];
+  //           degrees[lid] = local_sum[lid];
+  //       /// 3. Compute block offsets if there's an output frontier.
+  //         group_barrier(item.get_group());
+  //           // Define the atomic operation reference outside the loop
+  //         // printf("vertices = %d, lid = %d, degrees[lid] = %d, agg = %d\n", vertices[lid],lid, degrees[lid], aggregate_degree_per_block);
+
+  //         for (int i = lid;            // threadIdx.x
+  //      i < aggregate_degree_per_block;  // total degree to process
+  //      i += blockDim    // increment by blockDim.x
+  // ) {  
+
+  //        auto it = std::upper_bound(degrees.begin(),degrees.end(), i);
+  //     // int id = std::distance(degrees, it) - 1;
+  //   Uint32 id = std::distance(degrees.begin(), it)-1; // Return the distance minus 1
+  //   if(id < degrees.size()){
+  //           Uint32 v = vertices[id];
+  //               Distance[v] = iteration + 1;  
+                
+                
+  //               // Use atomic operation to update the global Frontier array
+  //               // sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,
+  //               //     sycl::memory_scope::device, 
+  //               //     sycl::access::address_space::global_space> atomic_op_global(frontierCount[0]);
+
+  //               // Use atomic operation to update the global Frontier array
+  //               sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,
+  //           sycl::memory_scope::device, 
+  //           sycl::access::address_space::global_space> atomic_op_global(frontierCount[0]);
+  //           if(local_counter[id]){
+  //               Frontier[atomic_op_global.fetch_add(1)] = v;
+  //               VisitMask[v]=0;
+  //           }
+  //   }
   }
         // group_barrier(item.get_group());
         });
