@@ -192,7 +192,7 @@ event parallel_explorer_kernel(queue &q,
           const int blockIdx  = item.get_group(0); // blockIdx.x
           const int gridDim   = item.get_group_range(0); // gridDim.x
           const int blockDim  = item.get_local_range(0); // blockDim.x
-          Uint32 local_th_deg[ITEMS_PER_THREAD]; // this variable is shared between workitems
+          Uint32 local_th_deg; // this variable is shared between workitems
           Uint32  vertex;
           Uint32  sedge;
           Uint32  degree;
@@ -200,18 +200,11 @@ event parallel_explorer_kernel(queue &q,
 
             if (gid < V) {
                 Uint32 v = Frontier[gid];
-                // vertices[lid] = v;
-                
-                if (v != -1) {
-                    sedges[lid] = usm_nodes_start[v];
-                    local_th_deg[0] =usm_nodes_start[v+1] - usm_nodes_start[v];
-                } else {
-                    local_th_deg[0] = 0;
-                }
+                sedges[lid] = usm_nodes_start[v];
+                local_th_deg =usm_nodes_start[v+1] - sedges[lid];
             }
             else {
-                // vertices[lid] = -1;
-                local_th_deg[0] = 0;
+                local_th_deg = 0;
             }
         
           sycl::group_barrier(item.get_group());
@@ -220,8 +213,8 @@ event parallel_explorer_kernel(queue &q,
             //  aggregate_degree_per_block;
  
            /// 2. Exclusive sum of degrees to find total work items per block.
-            th_deg = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg[0], sycl::plus<>());
-            aggregate_degree_per_block = reduce_over_group(item.get_group(), local_th_deg[0], sycl::plus<>());
+            th_deg = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg, sycl::plus<>());
+            aggregate_degree_per_block = reduce_over_group(item.get_group(), local_th_deg, sycl::plus<>());
             // local_sum[lid] = ;
 
             // if(lid == blockDim -1)
@@ -230,43 +223,9 @@ event parallel_explorer_kernel(queue &q,
             // local_sum2[lid] = th_deg;
             sycl::group_barrier(item.get_group());
 
-            // unsigned int aggregate_degree_per_block =  local_sum2[blockDim - 1];
-
-            
-            // aggregate_degree_per_block += local_th_deg[lid];
-    
-           // Store back to shared memory (to later use in the binary search).
-          
-            // if((lid == blockDim -1))
-              // aggregate_degree_per_block += original_th_deg;
-              
-        /// 3. Compute block offsets if there's an output frontier.
-          // group_barrier(item.get_group());
-          // if(lid == 0){
-          //   sycl::atomic_ref<Uint32, sycl::memory_order::acq_rel, 
-          //                            sycl::memory_scope::device, 
-          //                            sycl::access::address_space::global_space> atomic_ref(block_offsets[0]);
-          //           OOffset[0] = atomic_ref.fetch_add(aggregate_degree_per_block);
-          // }
-          
-      
-
-          // auto length = gid - lid + blockDim;
-          // if (V < length)
-            // length = V;
-          // length -= gid - lid;
-
-          Uint32 length = (V < gid - lid + blockDim) ? (V - (gid -lid)) : blockDim;
+            Uint32 length = (V < gid - lid + blockDim) ? (V - (gid -lid)) : blockDim;
     
 
-      // printf("blockDim = %d", blockDim);
-      // int agg_cnt =0;
-      // if(aggregate_degree_per_block > 0)
-      // printf("agg = %d\n", aggregate_degree_per_block);
-      
-      //  if(gid < 5)
-      //  printf("vertices = %d, lid = %d, sedges[lid] = %d, degrees[lid] = %d,length = %d, agg = %d\n", vertices[lid],lid,sedges[lid], degrees[lid],length, aggregate_degree_per_block);
-      
   for (int i = lid;            // threadIdx.x
        i < aggregate_degree_per_block;  // total degree to process
        i += blockDim    // increment by blockDim.x
@@ -278,31 +237,14 @@ event parallel_explorer_kernel(queue &q,
   /// resultant neighbor or invalid vertex is written to the output frontier.
     // Implement a simple upper_bound algorithm for use in SYCL
   
-     auto it = upper_bound(degrees,length, i);
-      int id =  it - 1;
-    // Uint32 id = std::distance(degrees.begin(), it)-1; // Return the distance minus 1
-    
-    // if(id < length){
-    // Uint32 v =  ? vertices[id] : -1;              // source
-    // if ((id < degrees.size())){
-    // Read from the frontier
+    Uint32 it = upper_bound(degrees,length, i);
+    Uint32 id =  it - 1;
     Uint32  e = sedges[id] + i  - degrees[id]; 
     Uint32  n  = Edges[e];   
 
-    // bool cond =(search(v,n,e)) ;
-// Debug: Print the thread-local th_deg for verification
-              
-      // if (cond) {
-      if(!Visit[n]){
+    if(!Visit[n]){
       VisitMask[n] = 1;
-      }
-    // }
-    
-      // if(gid == 0)
-    // printf("i: %d, it = %d, l=%d id = %d, v = %d, e = %d, n = %d, offset[0] = %lu\n", i, it,length,id,v,e,n,OOffset[0]);
-    // if(blockDim * blockIdx + lid == 1)
-    // printf("i: %d, it = %d, l=%d id = %d, v = %d, e = %d, n = %d, offset[0] = %lu\n", i, it,length,id,v,e,n,OOffset[0]);
-// }
+    }
   } 
         
     });
@@ -361,6 +303,7 @@ event parallel_levelgen_kernel(queue &q,
                 // local_counter[lid] = 1;
                 // vertices[lid] = gid;
             }
+        }
   //           else{
   //             vertices[lid] = -1;
   //             local_counter[lid] = 0;
@@ -423,7 +366,7 @@ event parallel_levelgen_kernel(queue &q,
   //               VisitMask[v]=0;
   //           }
   //   }
-  }
+  // }
         // group_barrier(item.get_group());
         });
         });
@@ -566,7 +509,7 @@ void GPURun(int vertexCount,
     copyToDevice(q,IndexHost,EdgesDevice);
     copyToDevice(q,OffsetHost,OffsetDevice);
 
- 
+
 
 
 
@@ -583,10 +526,10 @@ void GPURun(int vertexCount,
     std::vector<double> run_times(num_runs,0);
     int zero = 0;
     for(int i =0; i < num_runs; i++){
-              std::vector<Uint32> FrontierHost(vertexCount,0);
+    std::vector<Uint32> FrontierHost(vertexCount,0);
     FrontierHost[0] = sourceNode;
     Uint32 *FrontierDevice    = malloc_device<Uint32>(FrontierHost.size(), q); 
-   copyToDevice(q,FrontierHost,FrontierDevice);
+    copyToDevice(q,FrontierHost,FrontierDevice);
     // We will have a single eflement int the pipe which is source vertex
     std::vector<Uint32> frontierCountHost(1,1);
     Uint32 *frontierCountDevice = malloc_device<Uint32>(1, q);
