@@ -11,6 +11,27 @@ using namespace sycl;
 
 #define MAX_NUM_LEVELS 100
 
+// |  Memory Model Equivalence
+// |  CUDA                 SYCL
+// +------------------------------------+
+// |  register        = private memory  |
+// |  shared memory   = local memory    |
+// |  constant memory = constant memory |
+// |  global memory   = global memory   |
+// |  local memory    = N/A             |
+// +------------------------------------+
+
+
+// |  Execution Model Equivalence
+// |  CUDA          SYCL
+// +------------------------+
+// |  SM        = CU        |
+// |  SM core   = PE        |
+// |  thread    = work-item |
+// |  block     = work-group|
+// +------------------------+
+
+
 // Intel Compatibility Tool (aka c2s)
 // #include <dpct/dpct.hpp>
 // #include <dpct/rng_utils.hpp>
@@ -74,33 +95,6 @@ double GetExecutionTime(const event &e) {
   return kernel_time;
 }
 
-// bool search(
-//                       Uint32 const& source,    // ... source
-//                       Uint32 const& neighbor,  // neighbor
-//                       Uint32 const& edge        // edge
-//                       ){
-//       // If the neighbor is not visited, update the distance. Returning false
-//       // here means that the neighbor is not added to the output frontier, and
-//       // instead an invalid vertex is added in its place. These invalides (-1 in
-//       // most cases) can be removed using a filter operator or uniquify.
-
-//       // if (distances[neighbor] != std::numeric_limits<vertex_t>::max())
-//       //   return false;
-//       // else
-//       //   return (math::atomic::cas(
-//       //               &distances[neighbor],
-//       //               std::numeric_limits<vertex_t>::max(), iteration + 1) ==
-//       //               std::numeric_limits<vertex_t>::max());
-
-//       // Simpler logic for the above.
-//       auto old_distance = sycl::atomic_ref<std::int32_t, 
-//                                memory_order::relaxed, 
-//                                memory_scope::device, 
-//                                access::address_space::global_space>(distances[neighbor])
-//                         .fetch_min(iteration + 1);
-
-// return (iteration + 1 < old_distance);
-//     };
 
 template <typename T>
 int upper_bound(const sycl::local_accessor<T> &arr, int n, int value) {
@@ -126,108 +120,66 @@ event parallel_explorer_kernel(queue &q,
                                 int V, // number of vertices
                                 Uint32 iteration,
                                 Uint32* usm_nodes_start,
-                                Uint32 *Edges,
-                                Uint32* Frontier,
-                                Uint32 *frontierCount,
-                                MyUint1 *VisitMask,
-                                Uint32 *Distance,
-                                MyUint1 *Visit)
+                                Uint32 *usm_edges,
+                                Uint32* usm_pipe,
+                                Uint32 *usm_pipe_size,
+                                MyUint1 *usm_visit_mask,
+                                Uint32 *usm_dist,
+                                MyUint1 *usm_visit)
     {
 
-   // Define the work-group size and the number of work-groups
-    const size_t local = THREADS_PER_BLOCK;  // Number of work-items per work-group
-    const size_t global = ((V + local - 1) / local) * local;
-    // int ncus = q.get_device().get_info<info::device::max_compute_units>();
-
-
-
-
-    // std::cout<< "number of maximumx compute units" << ncus << "\n";
-    // Allocate USM shared memory
-    // Uint32 *degrees = malloc_device<Uint32>(256, q);
-    // Uint32 *sedges = malloc_device<Uint32>(256, q);
-    // Uint32 *vertices = malloc_device<Uint32>(256, q);
-    // std::vector<Uint32> vertices_a(256,0);
-    Uint32 *block_offsets = malloc_device<Uint32>(1, q);
-    
-
-
-
-// |  Memory Model Equivalence
-// |  CUDA                 SYCL
-// +------------------------------------+
-// |  register        = private memory  |
-// |  shared memory   = local memory    |
-// |  constant memory = constant memory |
-// |  global memory   = global memory   |
-// |  local memory    = N/A             |
-// +------------------------------------+
-
-
-// |  Execution Model Equivalence
-// |  CUDA          SYCL
-// +------------------------+
-// |  SM        = CU        |
-// |  SM core   = PE        |
-// |  thread    = work-item |
-// |  block     = work-group|
-// +------------------------+
-
-
+    // Define the work-group size and the number of work-groups
+    const size_t local_size = THREADS_PER_BLOCK;  // Number of work-items per work-group
+    const size_t global_size = ((V + local_size - 1) / local_size) * local_size;
 
     // Setup the range
-    nd_range<1> range(global, local);
+    nd_range<1> range(global_size, local_size);
 
         auto e = q.submit([&](handler& h) {
           // Local memory for exclusive sum, shared within the work-group
-          // sycl::local_accessor<int> local_sum(local, h);
-          // sycl::local_accessor<int> local_sum2(local, h);
-          // sycl::local_accessor<Uint32> local_th_deg(local, h);
-          // sycl::local_accessor<Uint32> vertices(local, h);
-          sycl::local_accessor<Uint32> sedges(local, h);
-          sycl::local_accessor<Uint32> degrees(local, h);
+          // sycl::local_accessor<int> local_sum(local_size, h);
+          // sycl::local_accessor<int> local_sum2(local_size, h);
+          // sycl::local_accessor<Uint32> local_th_deg(local_size, h);
+          // sycl::local_accessor<Uint32> vertices(local_size, h);
+          sycl::local_accessor<Uint32> sedges(local_size, h);
+          sycl::local_accessor<Uint32> degrees(local_size, h);
         h.parallel_for<class ExploreNeighbours>(range, [=](nd_item<1> item) {
           const int gid = item.get_global_id(0);    // global id
           const int lid  = item.get_local_id(0); // threadIdx.x
           const int blockIdx  = item.get_group(0); // blockIdx.x
           const int gridDim   = item.get_group_range(0); // gridDim.x
           const int blockDim  = item.get_local_range(0); // blockDim.x
+
+          device_ptr<Uint32> DevicePtr_start(usm_nodes_start);  
+          device_ptr<Uint32> DevicePtr_end(usm_nodes_start + 1);  
+
+
+          Uint32 v;
           Uint32 local_th_deg; // this variable is shared between workitems
-          Uint32  vertex;
-          Uint32  sedge;
-          Uint32  degree;
         // this variable will be instantiated for each work-item separately
 
             if (gid < V) {
-                Uint32 v = Frontier[gid];
-                sedges[lid] = usm_nodes_start[v];
-                local_th_deg =usm_nodes_start[v+1] - sedges[lid];
+                v = usm_pipe[gid];
+                sedges[lid] = DevicePtr_start[v];
+                local_th_deg =DevicePtr_end[v] - DevicePtr_start[v];
             }
             else {
                 local_th_deg = 0;
             }
-        
-          sycl::group_barrier(item.get_group());
-            Uint32 th_deg;
-            Uint32 aggregate_degree_per_block;
-            //  aggregate_degree_per_block;
- 
-           /// 2. Exclusive sum of degrees to find total work items per block.
-            th_deg = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg, sycl::plus<>());
-            aggregate_degree_per_block = reduce_over_group(item.get_group(), local_th_deg, sycl::plus<>());
-            // local_sum[lid] = ;
+          // sycl::group_barrier(item.get_group());
 
-            // if(lid == blockDim -1)
-            // th_deg +=local_th_deg[lid];
-            degrees[lid] = th_deg;
-            // local_sum2[lid] = th_deg;
-            sycl::group_barrier(item.get_group());
+          // 2. Exclusive sum of degrees to find total work items per block.
+          Uint32 th_deg = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg, sycl::plus<>());
+          degrees[lid] = th_deg;
+          // sycl::group_barrier(item.get_group());
 
-            Uint32 length = (V < gid - lid + blockDim) ? (V - (gid -lid)) : blockDim;
-    
+          // 3. Cumulative sum of total number of nonzeros 
+          Uint32 total_nnz = reduce_over_group(item.get_group(), local_th_deg, sycl::plus<>());
+          Uint32 length = (V < gid - lid + blockDim) ? (V - (gid -lid)) : blockDim;
+     
 
   for (int i = lid;            // threadIdx.x
-       i < aggregate_degree_per_block;  // total degree to process
+       i < total_nnz;  // total degree to process
        i += blockDim    // increment by blockDim.x
   ) {
 
@@ -240,10 +192,10 @@ event parallel_explorer_kernel(queue &q,
     Uint32 it = upper_bound(degrees,length, i);
     Uint32 id =  it - 1;
     Uint32  e = sedges[id] + i  - degrees[id]; 
-    Uint32  n  = Edges[e];   
+    Uint32  n  = usm_edges[e];   
 
-    if(!Visit[n]){
-      VisitMask[n] = 1;
+    if(!usm_visit[n]){
+      usm_visit_mask[n] = 1;
     }
   } 
         
@@ -257,27 +209,27 @@ return e;
 
 event parallel_levelgen_kernel(queue &q,
                                 int V,
-                                Uint32 *Distance,
-                                MyUint1 *VisitMask,
-                                MyUint1 *Visit,
+                                Uint32 *usm_dist,
+                                MyUint1 *usm_visit_mask,
+                                MyUint1 *usm_visit,
                                 int iteration,
-                                Uint32 *Frontier,
-                                Uint32 *frontierCount
+                                Uint32 *usm_pipe,
+                                Uint32 *usm_pipe_size
                                  ){
    // Define the work-group size and the number of work-groups
-    const size_t local = THREADS_PER_BLOCK;  // Number of work-items per work-group
-    const size_t global = ((V + local - 1) / local) * local;
+    const size_t local_size = THREADS_PER_BLOCK;  // Number of work-items per work-group
+    const size_t global_size = ((V + local_size - 1) / local_size) * local_size;
 
     // Setup the range
-    nd_range<1> range(global, local);
+    nd_range<1> range(global_size, local_size);
         auto e = q.submit([&](handler& h) {
           // Local memory for exclusive sum, shared within the work-group
-          // sycl::local_accessor<int> localVisitMask(local, h);
-          // sycl::local_accessor<int> local_sum(local, h);
-          // sycl::local_accessor<int> local_sum2(local, h);
-          // sycl::local_accessor<int> local_counter(local, h);
-                    // sycl::local_accessor<Uint32> degrees(local, h);
-                    // sycl::local_accessor<Uint32> vertices(local, h);
+          // sycl::local_accessor<int> localVisitMask(local_size, h);
+          // sycl::local_accessor<int> local_sum(local_size, h);
+          // sycl::local_accessor<int> local_sum2(local_size, h);
+          // sycl::local_accessor<int> local_counter(local_size, h);
+                    // sycl::local_accessor<Uint32> degrees(local_size, h);
+                    // sycl::local_accessor<Uint32> vertices(local_size, h);
           // sycl::local_accessor<int> local_counter(1, h);
         h.parallel_for<class LevelGen>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
           const int gid = item.get_global_id(0);    // global id
@@ -287,18 +239,18 @@ event parallel_levelgen_kernel(queue &q,
           const int blockDim  = item.get_local_range(0); // blockDim.x
 
 
-    // Load a chunk of VisitMask into local memory
+    // Load a chunk of usm_visit_mask into local memory
         if (gid < V) {
-            MyUint1 vmask = VisitMask[gid];
+            MyUint1 vmask = usm_visit_mask[gid];
             if(vmask == 1){
-              Distance[gid] = iteration + 1;  
-                Visit[gid] = 1;
+              usm_dist[gid] = iteration + 1;  
+                usm_visit[gid] = 1;
                                 sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,
             sycl::memory_scope::device, 
-            sycl::access::address_space::global_space> atomic_op_global(frontierCount[0]);
+            sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
             
-                Frontier[atomic_op_global.fetch_add(1)] = gid;
-                VisitMask[gid]=0;
+                usm_pipe[atomic_op_global.fetch_add(1)] = gid;
+                usm_visit_mask[gid]=0;
             
                 // local_counter[lid] = 1;
                 // vertices[lid] = gid;
@@ -319,7 +271,7 @@ event parallel_levelgen_kernel(queue &q,
 
 
   //           Uint32 th_deg = local_counter[lid];
-  //           //  aggregate_degree_per_block;
+  //           //  total_nnz;
  
   //          /// 2. Exclusive sum of degrees to find total work items per block.
   //            th_deg = sycl::exclusive_scan_over_group(item.get_group(), th_deg, sycl::plus<>());
@@ -332,15 +284,15 @@ event parallel_levelgen_kernel(queue &q,
   //           local_sum2[lid] = th_deg;
   //           sycl::group_barrier(item.get_group());
 
-  //           unsigned int aggregate_degree_per_block =  local_sum2[blockDim - 1];
+  //           unsigned int total_nnz =  local_sum2[blockDim - 1];
   //           degrees[lid] = local_sum[lid];
   //       /// 3. Compute block offsets if there's an output frontier.
   //         group_barrier(item.get_group());
   //           // Define the atomic operation reference outside the loop
-  //         // printf("vertices = %d, lid = %d, degrees[lid] = %d, agg = %d\n", vertices[lid],lid, degrees[lid], aggregate_degree_per_block);
+  //         // printf("vertices = %d, lid = %d, degrees[lid] = %d, agg = %d\n", vertices[lid],lid, degrees[lid], total_nnz);
 
   //         for (int i = lid;            // threadIdx.x
-  //      i < aggregate_degree_per_block;  // total degree to process
+  //      i < total_nnz;  // total degree to process
   //      i += blockDim    // increment by blockDim.x
   // ) {  
 
@@ -349,21 +301,21 @@ event parallel_levelgen_kernel(queue &q,
   //   Uint32 id = std::distance(degrees.begin(), it)-1; // Return the distance minus 1
   //   if(id < degrees.size()){
   //           Uint32 v = vertices[id];
-  //               Distance[v] = iteration + 1;  
+  //               usm_dist[v] = iteration + 1;  
                 
                 
   //               // Use atomic operation to update the global Frontier array
   //               // sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,
   //               //     sycl::memory_scope::device, 
-  //               //     sycl::access::address_space::global_space> atomic_op_global(frontierCount[0]);
+  //               //     sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
 
   //               // Use atomic operation to update the global Frontier array
   //               sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,
   //           sycl::memory_scope::device, 
-  //           sycl::access::address_space::global_space> atomic_op_global(frontierCount[0]);
+  //           sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
   //           if(local_counter[id]){
   //               Frontier[atomic_op_global.fetch_add(1)] = v;
-  //               VisitMask[v]=0;
+  //               usm_visit_mask[v]=0;
   //           }
   //   }
   // }
@@ -375,9 +327,9 @@ return e;
 
 event pipegen_kernel(queue &q,
                                 int V,
-                                Uint32 *Frontier,
-                                Uint32 *frontierCount,
-                                MyUint1 *VisitMask
+                                Uint32 *usm_pipe,
+                                Uint32 *usm_pipe_size,
+                                MyUint1 *usm_visit_mask
                                  ){
                                   
 
@@ -385,25 +337,25 @@ event pipegen_kernel(queue &q,
 
           
   
-    const size_t local = THREADS_PER_BLOCK;  // Number of work-items per work-group
-    const size_t global = ((V + local - 1) / local) * local;
+    const size_t local_size = THREADS_PER_BLOCK;  // Number of work-items per work-group
+    const size_t global_size = ((V + local_size - 1) / local_size) * local_size;
 
     // Setup the range
-    nd_range<1> range(global, local);
+    nd_range<1> range(global_size, local_size);
 
         auto e = q.parallel_for<class PipeGenerator>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
           int gid = item.get_global_id();
           sycl::atomic_ref<Uint32, sycl::memory_order_relaxed,
           sycl::memory_scope_device,sycl::access::address_space::global_space>
-          atomic_op_global(frontierCount[0]);
+          atomic_op_global(usm_pipe_size[0]);
       
           // TODO
           // blockscan here to findd the total elements to insert frontier
           // then another grid-stride loop to write frontier 
           if (gid < V) {
-              if(VisitMask[gid]){
-                // Frontier[atomic_op_global.fetch_add(1)] = gid;
-                VisitMask[gid]=0;
+              if(usm_visit_mask[gid]){
+                // usm_pipe[atomic_op_global.fetch_add(1)] = gid;
+                usm_visit_mask[gid]=0;
               }
             
             } 
@@ -417,21 +369,21 @@ return e;
 
 event maskremove_kernel(queue &q,
                         int V, // number of vertices
-                        MyUint1 *VisitMask
+                        MyUint1 *usm_visit_mask
                                  ){
                                   
    // Define the work-group size and the number of work-groups
-    const size_t local = THREADS_PER_BLOCK;  // Number of work-items per work-group
-    const size_t global = ((V + local - 1) / local) * local;
+    const size_t local_size = THREADS_PER_BLOCK;  // Number of work-items per work-group
+    const size_t global_size = ((V + local_size - 1) / local_size) * local_size;
 
     // Setup the range
-    nd_range<1> range(global, local);
+    nd_range<1> range(global_size, local_size);
 
         auto e = q.parallel_for<class MaskRemove>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
         int gid = item.get_global_id();
         if (gid < V) {
-            if(VisitMask[gid]){
-              VisitMask[gid]=0;  
+            if(usm_visit_mask[gid]){
+              usm_visit_mask[gid]=0;  
            }
           }
 
@@ -501,13 +453,13 @@ void GPURun(int vertexCount,
     // FrontierHost[1] = 87;
 
 
-    Uint32* OffsetDevice      = malloc_device<Uint32>(OffsetHost.size(), q);
+    // Uint32* OffsetDevice      = malloc_device<Uint32>(OffsetHost.size(), q);
   
-    Uint32 *EdgesDevice       = malloc_device<Uint32>(IndexHost.size(), q); 
+    // Uint32 *EdgesDevice       = malloc_device<Uint32>(IndexHost.size(), q); 
 
 
-    copyToDevice(q,IndexHost,EdgesDevice);
-    copyToDevice(q,OffsetHost,OffsetDevice);
+    // copyToDevice(q,IndexHost,EdgesDevice);
+    // copyToDevice(q,OffsetHost,OffsetDevice);
 
 
 
@@ -526,6 +478,7 @@ void GPURun(int vertexCount,
     std::vector<double> run_times(num_runs,0);
     int zero = 0;
     for(int i =0; i < num_runs; i++){
+
     std::vector<Uint32> FrontierHost(vertexCount,0);
     FrontierHost[0] = sourceNode;
     Uint32 *FrontierDevice    = malloc_device<Uint32>(FrontierHost.size(), q); 
@@ -533,7 +486,16 @@ void GPURun(int vertexCount,
     // We will have a single eflement int the pipe which is source vertex
     std::vector<Uint32> frontierCountHost(1,1);
     Uint32 *frontierCountDevice = malloc_device<Uint32>(1, q);
-      Uint32 *DistanceDevice    = malloc_device<Uint32>(DistanceHost.size(), q); 
+
+  Uint32* OffsetDevice      = malloc_device<Uint32>(OffsetHost.size(), q);
+  
+    Uint32 *EdgesDevice       = malloc_device<Uint32>(IndexHost.size(), q); 
+
+
+    copyToDevice(q,IndexHost,EdgesDevice);
+    copyToDevice(q,OffsetHost,OffsetDevice);
+
+    Uint32 *DistanceDevice    = malloc_device<Uint32>(DistanceHost.size(), q); 
     MyUint1 *VisitMaskDevice  = malloc_device<MyUint1>(VisitMaskHost.size(), q); 
     MyUint1 *VisitDevice      = malloc_device<MyUint1>(VisitHost.size(), q); 
     copyToDevice(q,distances[i],DistanceDevice);
@@ -570,7 +532,11 @@ void GPURun(int vertexCount,
       double total_time = (end_time - start_time)* 1e-6; // ns to ms
       run_times[i] = total_time;
       copyToHost(q,DistanceDevice,distances[i]);
-      
+    sycl::free(OffsetDevice, q);
+    sycl::free(EdgesDevice, q);
+    sycl::free(DistanceDevice, q);
+    sycl::free(VisitDevice, q);
+    sycl::free(VisitMaskDevice, q);
 
     } // for loop num_runs
 
