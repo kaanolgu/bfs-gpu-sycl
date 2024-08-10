@@ -92,7 +92,7 @@ int main(int argc, char * argv[])
   parser.addArgument("num_runs", "1");
   parser.addArgument("dataset", "default");
   parser.addArgument("root", "1");
-
+  parser.addArgument("num_gpus", "1");
   // Parse the command line arguments
   parser.parseArguments(argc, argv);
 
@@ -101,6 +101,7 @@ int main(int argc, char * argv[])
   std::string datasetName = parser.getArgument("dataset").c_str();
   std::cout << datasetName << " a" << std::endl;
   int start_vertex = stoi(parser.getArgument("root"));
+  int num_gpus =  stoi(parser.getArgument("num_gpus"));
 
   parser.printArguments();
 
@@ -116,22 +117,31 @@ int main(int argc, char * argv[])
 
   
   std::cout << "######################LOADING MATRIX#########################" << std::endl;
-  loadMatrix(NUM_COMPUTE_UNITS, old_buffer_size_meta, old_buffer_size_indptr, old_buffer_size_inds,
-             offset_meta, offset_indptr, offset_inds,datasetName);
+  CSRGraph graph = loadMatrix(num_gpus,datasetName);
+
+    // Example: Use the offsets to determine where data from each partition starts
+    for (size_t i = 0; i < graph.metaOffsets.size(); ++i) {
+        std::cout << "Partition " << i << " starts at meta offset: " << graph.metaOffsets[i] << std::endl;
+        std::cout << "Partition " << i << " starts at indptr offset: " << graph.indptrOffsets[i] << std::endl;
+        std::cout << "Partition " << i << " starts at inds offset: " << graph.indsOffsets[i] << std::endl;
+    }
+
+
+  CSRGraph graph_cpu = loadMatrix(1,datasetName);
   std::cout << "#############################################################\n" << std::endl;
-  numCols = source_meta[1];  // cols -> total number of vertices
+  numCols = graph.meta[1];  // cols -> total number of vertices
   std::cout << "number of vertices "<< numCols << std::endl;
   ////////////
   // FPGA
   ///////////
 
-  std::cout << "i: " << 135368<< ", num_Neighbours: "<< (source_indptr[135368+1] - source_indptr[135368]) << std::endl;
-std::cout << "begin addr : " << source_indptr[135368] << std::endl;
+  std::cout << "i: " << 135368<< ", num_Neighbours: "<< (graph.indptr[135368+1] - graph.indptr[135368]) << std::endl;
+std::cout << "begin addr : " << graph.indptr[135368] << std::endl;
   
 
   // allocate mem for the result on host side
   std::vector<Uint32> h_dist(numCols,-1);
-    std::cout << "number of vertices "<< numCols << std::endl;
+    // std::cout << "number of vertices "<< numCols << std::endl;
 
   h_dist[start_vertex]=0; 
   // h_dist[0]=1;  
@@ -153,8 +163,8 @@ std::cout << "begin addr : " << source_indptr[135368] << std::endl;
   int indptr_end = old_buffer_size_indptr[1];
   int inds_end = old_buffer_size_inds[1];
   // initalize the memory
-  int numEdges  = source_meta[2];  // nonZ count -> total edges
-  numRows  = source_meta[0];  // this it the value we want! (rows)
+  int numEdges  = graph.meta[2];  // nonZ count -> total edges
+  numRows  = graph.meta[0];  // this it the value we want! (rows)
   // Sanity Check if we loaded the graph properly
   assert(numRows <= numCols);
     std::cout << "number of vertices "<< numCols << std::endl;
@@ -163,13 +173,20 @@ std::cout << "begin addr : " << source_indptr[135368] << std::endl;
   std::cout << "number of vertices "<< numCols << std::endl;
 
   GPURun(numRows,
-                  source_inds,
-                  source_indptr,
+                  graph.inds,
+                  graph.indptr,
                   h_updating_graph_mask,
                   h_graph_visited,
                   h_dist,
+                  graph.indptrOffsets,
+                  graph.indsOffsets,
                   start_vertex,numEdges,
                   num_runs);  
+
+  
+  //////////////////////////////////////////////////
+  // CPU
+  //////////////////////////////////////////////////
 
 
   // initalize the memory again
@@ -184,7 +201,7 @@ std::cout << "begin addr : " << source_indptr[135368] << std::endl;
   host_graph_visited[start_vertex]=1;
   host_level[start_vertex]=0; 
 
-  run_bfs_cpu(numCols,source_indptr,source_inds, host_graph_mask, host_updating_graph_mask, host_graph_visited, host_level);
+  run_bfs_cpu(numCols,graph_cpu.indptr,graph_cpu.inds, host_graph_mask, host_updating_graph_mask, host_graph_visited, host_level);
 
   // Select the element with the maximum value
   auto it = std::max_element(host_level.begin(), host_level.end());

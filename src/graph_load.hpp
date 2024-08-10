@@ -1,94 +1,81 @@
+#include <fstream>
+#include <filesystem>
+#include <iostream>
+#include <vector>
+#include <stdexcept>
+// CSR structure to hold the graph
+struct CSRGraph {
+    std::vector<Uint32> meta;	
+    std::vector<Uint32> indptr;
+    std::vector<Uint32> inds;
 
-#define SIZE_ONE 1
+	std::vector<Uint32> metaOffsets;
+    std::vector<Uint32> indptrOffsets;
+    std::vector<Uint32> indsOffsets;
+};
 
-std::vector<Uint32 > source_meta(SIZE_ONE);
-std::vector<Uint32 > source_indptr(SIZE_ONE);
-std::vector<Uint32 > source_inds(SIZE_ONE);
+void readFromMM(const char *filename, std::vector<Uint32> &buffer) {
+    std::cout << "Reading " << filename << "..." ;
 
+    // Open the file:
+    std::ifstream file(filename, std::ios::binary);
+    if (!file) {
+        std::cerr << "ERROR: File " << filename << " not found!" << std::endl;
+        throw std::runtime_error("File not found");
+    }
 
-size_t result;
+    // Get file size:
+    file.seekg(0, std::ios::end);
+    std::streampos fileSize = file.tellg();
+    file.seekg(0, std::ios::beg);
 
-Uint32 getFileSize(const char *fileName) {
-	  Uint32 fil_size;
-	  FILE * pFile;
-	  pFile = fopen ( fileName , "r" );
-	  if(pFile == NULL){
-		  std::cout << "ERROR (1) : File " << fileName << " not found! " << std::endl;
-		  assert(1);
+    if (fileSize == 0) {
+        std::cerr << "ERROR: File size is 0!" << std::endl;
+        throw std::runtime_error("File size is 0");
+    }
 
-	  }
-	  fseek(pFile, 0, SEEK_END); // seek to end of file
-	  fil_size = ftell(pFile); // get current file pointer
-	  if(fil_size == 0){
-		  std::cout << "ERROR (2) : File size is 0 !" << std::endl;
-	  }
-	fclose(pFile);
-	return fil_size;
+    size_t originalSize = buffer.size();
+    buffer.resize(originalSize + fileSize / sizeof(Uint32));
+
+    file.read(reinterpret_cast<char *>(buffer.data() + originalSize), fileSize);
+
+    std::cout << " OK" << std::endl;
 }
 
-void readIntoBuffer(const char * fileName,std::vector<Uint32 >&buffer, Uint32 bufsize,std::vector<Uint32> &old_buffer_size,Uint32 &offset,int index) {
-	  FILE * pFile;
-	  pFile = fopen ( fileName , "r" );
-	  fseek( pFile , 0 , SEEK_SET );
-	//   std::cout << old_buffer_size[index] << std::endl;
-	  result = fread(buffer.data() + offset,1,bufsize,pFile);
-	  if(result != bufsize){
-		  std::cout << " READ ERROR " << std::endl;
-	  }
-	  fclose ( pFile );
-	  offset += bufsize/4;
-	  old_buffer_size.push_back(offset);
-	//    for(int i = 0; i < 30; i++){
-		//    std::cout << "pointer[" << i << "] = "<< buffer[i] << std::endl;
-	//    }
+CSRGraph loadMatrix(Uint32 partitionCount, std::string datasetName) {
+    CSRGraph graph;
+    std::cout << "Loading matrix " << datasetName << " with " << partitionCount << " partitions.." << std::endl;
+    
+    std::string pth = "/dataset/";
+    std::string non_switch = getenv("PWD") + pth;
+    std::string temp = datasetName;
+    non_switch += temp + "-csc-" + std::to_string(partitionCount) + "/" + temp + "-csc-";
 
+    for (Uint32 i = 0; i < partitionCount; i++) {
+        CSRGraph singleGraph;
+
+        // Record the original sizes before loading new data
+        graph.metaOffsets.push_back(graph.meta.size());
+        graph.indptrOffsets.push_back(graph.indptr.size());
+        graph.indsOffsets.push_back(graph.inds.size());
+
+
+        std::string str_meta = non_switch + std::to_string(i) + "-meta.bin";
+        std::string str_indptr = non_switch + std::to_string(i) + "-indptr.bin";
+        std::string str_inds = non_switch + std::to_string(i) + "-inds.bin";
+        
+        readFromMM(str_meta.c_str(), singleGraph.meta);
+        readFromMM(str_indptr.c_str(), singleGraph.indptr);
+        readFromMM(str_inds.c_str(), singleGraph.inds);
+
+        graph.meta.insert(graph.meta.end(), singleGraph.meta.begin(), singleGraph.meta.end());
+        graph.indptr.insert(graph.indptr.end(), singleGraph.indptr.begin(), singleGraph.indptr.end());
+        graph.inds.insert(graph.inds.end(), singleGraph.inds.begin(), singleGraph.inds.end());
+    }
+	// // Record the original sizes after loading new data [final size]
+	// graph.metaOffsets.push_back(graph.meta.size());
+	// graph.indptrOffsets.push_back(graph.indptr.size());
+	// graph.indsOffsets.push_back(graph.inds.size());
+
+    return graph;
 }
-
-void readFromMM(const char * fileName,std::vector<Uint32 >&buffer,std::vector<Uint32> &old_buffer_size,Uint32 &offset,int index) {
-	std::cout << "Reading " << fileName << "..." ;
-	Uint32 fileSize = getFileSize(fileName);
-	// std::cout << "fileSize : " << fileSize << std::endl;
-	// define glob_buffer_size to keep track of the last file size written to the buffer in order to make sure we continue where we left off
-	buffer.resize(fileSize + old_buffer_size[index]);
-	readIntoBuffer(fileName,buffer, fileSize,old_buffer_size,offset,index);
-	std::cout << "OK" << std::endl;
-}
-
-
-void loadMatrix(Uint32 partitionCount,	std::vector<Uint32>& old_buffer_size_meta,
-	std::vector<Uint32>& old_buffer_size_indptr,
-	std::vector<Uint32>& old_buffer_size_inds,Uint32 &offset_meta,Uint32 &offset_indptr,Uint32 &offset_inds,std::string datasetName) {
-	// datasetName = rmat-20-32
-	std::cout << "Loading matrix " << datasetName << " with " << partitionCount << " partitions.." << std::endl;  
-	std::string pth = "/dataset/";
-	std::string non_switch = getenv("PWD") + pth;
-	std::string temp = datasetName;
-
-	
-	non_switch += temp + "-csc-" + std::to_string(partitionCount) + "/" + temp + "-csc-";
-
-
-	Uint32 zeroz = 0;
-	for(int i = 0; i < partitionCount; i++){
-		std::string str_meta =non_switch +std::to_string(i)+ "-meta.bin";
-		std::string str_indptr = non_switch +std::to_string(i) +"-indptr.bin";
-		std::string str_inds = non_switch +std::to_string(i)+ "-inds.bin";
-		
-  		readFromMM(str_meta.c_str(), source_meta,old_buffer_size_meta,offset_meta,i);
-		readFromMM(str_indptr.c_str(), source_indptr,old_buffer_size_indptr,offset_indptr,i);
-		readFromMM(str_inds.c_str(), source_inds,old_buffer_size_inds,offset_inds,i);
-		
-	}
-
-  // cache the loaded matrix details to reuse later
-
-
-
-
-
-//  for(int i =old_buffer_siznds[partitionCount-1]/4-5 ; i < old_buffer_size_inds[partitionCount-1]/4+30; i++)
-//          std::cout << "\nsource_inds[" << i << "] : " << std::setw(10) << std::left << source_inds[i];
-
-
-}
-

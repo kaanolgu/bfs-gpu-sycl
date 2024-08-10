@@ -67,12 +67,25 @@ using namespace sycl;
 //         return a + b;
 //     }
 // };
-
+std::vector<sycl::device> get_two_devices() {
+  auto devs = sycl::device::get_devices();
+  if (devs.size() == 0)
+    throw "No devices available";
+  if (devs.size() == 1)
+    return {devs[0], devs[0]};
+  return {devs[0], devs[1]};
+}
 
 // initialize device arr with val, if needed set arr[pos] = pos_val
 template <typename T>
-void copyToDevice(queue &Q, std::vector<T> &arr,T *usm_arr){
-  Q.memcpy(usm_arr, arr.data(), arr.size() * sizeof(T));
+void copyToDevice(queue &Q, std::vector<T> &arr, T *usm_arr, size_t offset = 0) {
+    // Check if the offset is within the bounds of the array
+    if (offset > arr.size()) {
+        throw std::out_of_range("Offset is out of the bounds of the array.");
+    }
+
+    // Copy data from arr starting from arr.data() + offset
+    Q.memcpy(usm_arr, arr.data() + offset, (arr.size() - offset) * sizeof(T)).wait();
 }
 // initialize device arr with val, if needed set arr[pos] = pos_val
 template <typename T>
@@ -405,6 +418,8 @@ void GPURun(int vertexCount,
                   std::vector<MyUint1> &VisitMaskHost,
                   std::vector<MyUint1> &VisitHost,
                   std::vector<Uint32> &DistanceHost,
+                  std::vector<Uint32> &h_indptr_offsets,
+                  std::vector<Uint32> &h_inds_offsets,
                   int sourceNode,int edgeCount,const int num_runs) noexcept(false) {
  
 
@@ -426,7 +441,18 @@ void GPURun(int vertexCount,
             << std::endl;
 
   try {
+    auto devs = get_two_devices();
+    auto Q1 = sycl::queue{devs[0],
+                sycl::property::queue::enable_profiling{}};
+    auto Q2 = sycl::queue{devs[1],
+                sycl::property::queue::enable_profiling{}}; // if only one device is found, both queues
+                                    // will use same device
 
+   std::cout << "Running on devices:" << std::endl;
+    std::cout << "1:\t" << Q1.get_device().get_info<sycl::info::device::name>()
+              << std::endl;
+    std::cout << "2:\t" << Q2.get_device().get_info<sycl::info::device::name>()
+              << std::endl;
     // Create a queue bound to the chosen device.
     // If the device is unavailable, a SYCL runtime exception is thrown.
     // queue q(device_selector, fpga_tools::exception_handler, prop_list);
@@ -469,8 +495,10 @@ void GPURun(int vertexCount,
 
     // Compute kernel execution time
     sycl::event levelEvent,exploreEvent;
+    sycl::event levelEventQ,exploreEventQ;
     sycl::event pipeEvent,resetEvent;
     double exploreDuration=0,levelDuration=0;
+    double exploreDurationQ=0,levelDurationQ=0;
     double pipeDuration=0,resetDuration=0;
 
 
@@ -478,50 +506,68 @@ void GPURun(int vertexCount,
     std::vector<double> run_times(num_runs,0);
     int zero = 0;
     for(int i =0; i < num_runs; i++){
+      // Frontier Start
+      std::vector<Uint32> frontierCountHost(1,1);
+      std::vector<Uint32> FrontierHost(vertexCount,0);
+      FrontierHost[0] = sourceNode;
+      // Frontier End
+    Uint32 *FrontierDevice      = malloc_device<Uint32>(FrontierHost.size(), Q1); 
+    Uint32 *frontierCountDevice = malloc_device<Uint32>(1, Q1);
+    Uint32* OffsetDevice        = malloc_device<Uint32>(OffsetHost.size(), Q1);
+    Uint32 *EdgesDevice         = malloc_device<Uint32>(IndexHost.size(), Q1); 
+    Uint32 *DistanceDevice      = malloc_device<Uint32>(DistanceHost.size(), Q1); 
+    MyUint1 *VisitMaskDevice    = malloc_device<MyUint1>(VisitMaskHost.size(), Q1); 
+    MyUint1 *VisitDevice      = malloc_device<MyUint1>(VisitHost.size(), Q1); 
 
-    std::vector<Uint32> FrontierHost(vertexCount,0);
-    FrontierHost[0] = sourceNode;
-    Uint32 *FrontierDevice    = malloc_device<Uint32>(FrontierHost.size(), q); 
-    copyToDevice(q,FrontierHost,FrontierDevice);
-    // We will have a single eflement int the pipe which is source vertex
-    std::vector<Uint32> frontierCountHost(1,1);
-    Uint32 *frontierCountDevice = malloc_device<Uint32>(1, q);
+    Uint32 *FrontierDeviceQ      = malloc_device<Uint32>(FrontierHost.size(), Q2); 
+    Uint32 *frontierCountDeviceQ = malloc_device<Uint32>(1, Q2);
+    Uint32* OffsetDeviceQ        = malloc_device<Uint32>(OffsetHost.size(), Q2);
+    Uint32 *EdgesDeviceQ         = malloc_device<Uint32>(IndexHost.size(), Q2); 
+    Uint32 *DistanceDeviceQ      = malloc_device<Uint32>(DistanceHost.size(), Q2); 
+    MyUint1 *VisitMaskDeviceQ    = malloc_device<MyUint1>(VisitMaskHost.size(), Q2); 
+    MyUint1 *VisitDeviceQ      = malloc_device<MyUint1>(VisitHost.size(), Q2); 
+    copyToDevice(Q1,FrontierHost,FrontierDevice);
+    copyToDevice(Q1,IndexHost,EdgesDevice);
+    copyToDevice(Q1,OffsetHost,OffsetDevice);
+    copyToDevice(Q1,distances[i],DistanceDevice);
+    copyToDevice(Q1,VisitMaskHost,VisitMaskDevice);
+    copyToDevice(Q1,VisitHost,VisitDevice);
 
-  Uint32* OffsetDevice      = malloc_device<Uint32>(OffsetHost.size(), q);
-  
-    Uint32 *EdgesDevice       = malloc_device<Uint32>(IndexHost.size(), q); 
-
-
-    copyToDevice(q,IndexHost,EdgesDevice);
-    copyToDevice(q,OffsetHost,OffsetDevice);
-
-    Uint32 *DistanceDevice    = malloc_device<Uint32>(DistanceHost.size(), q); 
-    MyUint1 *VisitMaskDevice  = malloc_device<MyUint1>(VisitMaskHost.size(), q); 
-    MyUint1 *VisitDevice      = malloc_device<MyUint1>(VisitHost.size(), q); 
-    copyToDevice(q,distances[i],DistanceDevice);
-    copyToDevice(q,VisitMaskHost,VisitMaskDevice);
-    copyToDevice(q,VisitHost,VisitDevice);
+    copyToDevice(Q2,FrontierHost,FrontierDeviceQ);
+    copyToDevice(Q2,IndexHost,EdgesDeviceQ,h_inds_offsets[1]);
+    copyToDevice(Q2,OffsetHost,OffsetDeviceQ,h_indptr_offsets[1]);
+    copyToDevice(Q2,distances[i],DistanceDeviceQ);
+    copyToDevice(Q2,VisitMaskHost,VisitMaskDeviceQ);
+    copyToDevice(Q2,VisitHost,VisitDeviceQ);
     double start_time = 0;
     double end_time = 0;
-    for(int iteration=0; iteration < MAX_NUM_LEVELS; iteration++){
+    for(int iteration=0; iteration < 1; iteration++){
       if(frontierCountHost[0] == 0){
         std::cout << "total number of iterations" << iteration << "\n";
         break;
       }    
-      q.memcpy(frontierCountDevice, &zero, sizeof(Uint32)).wait();  
-      exploreEvent = parallel_explorer_kernel<1>(q,frontierCountHost[0],iteration,OffsetDevice,EdgesDevice,FrontierDevice,frontierCountDevice, VisitMaskDevice,DistanceDevice,VisitDevice);
-      q.wait();
+      Q1.memcpy(frontierCountDevice, &zero, sizeof(Uint32)).wait();  
+      Q2.memcpy(frontierCountDeviceQ, &zero, sizeof(Uint32)).wait();  
+      exploreEvent = parallel_explorer_kernel<1>(Q1,frontierCountHost[0],iteration,OffsetDevice,EdgesDevice,FrontierDevice,frontierCountDevice, VisitMaskDevice,DistanceDevice,VisitDevice);
+      exploreEventQ = parallel_explorer_kernel<1>(Q2,frontierCountHost[0],iteration,OffsetDeviceQ,EdgesDeviceQ,FrontierDeviceQ,frontierCountDeviceQ, VisitMaskDeviceQ,DistanceDeviceQ,VisitDeviceQ);
+      Q1.wait();
+      Q2.wait();
       // Level Generate
-      levelEvent =parallel_levelgen_kernel(q,vertexCount,DistanceDevice,VisitMaskDevice,VisitDevice,iteration,FrontierDevice,frontierCountDevice);
-      q.wait();
-      // pipeEvent =pipegen_kernel(q,vertexCount,FrontierDevice, frontierCountDevice,VisitMaskDevice);
-      // q.wait();
-      // resetEvent =maskremove_kernel(q,vertexCount,VisitMaskDevice);             
-      // q.wait();
-      copyToHost(q,frontierCountDevice,frontierCountHost);
+      levelEvent =parallel_levelgen_kernel(Q1,vertexCount,DistanceDevice,VisitMaskDevice,VisitDevice,iteration,FrontierDevice,frontierCountDevice);
+      levelEventQ =parallel_levelgen_kernel(Q2,vertexCount,DistanceDeviceQ,VisitMaskDeviceQ,VisitDeviceQ,iteration,FrontierDeviceQ,frontierCountDeviceQ);
+      Q1.wait();
+      Q2.wait();
+      // pipeEvent =pipegen_kernel(Q1,vertexCount,FrontierDevice, frontierCountDevice,VisitMaskDevice);
+      // Q1.wait();
+      // resetEvent =maskremove_kernel(Q1,vertexCount,VisitMaskDevice);             
+      // Q1.wait();
+      copyToHost(Q1,frontierCountDevice,frontierCountHost);
+      copyToHost(Q2,frontierCountDeviceQ,frontierCountHost);
       // Capture execution times 
       exploreDuration += GetExecutionTime(exploreEvent);
       levelDuration   += GetExecutionTime(levelEvent);
+      exploreDurationQ += GetExecutionTime(exploreEventQ);
+      levelDurationQ   += GetExecutionTime(levelEventQ);
       // pipeDuration    += GetExecutionTime(pipeEvent);
       // resetDuration   += GetExecutionTime(resetEvent);
       // Increase the level by 1 
@@ -531,27 +577,28 @@ void GPURun(int vertexCount,
       end_time = levelEvent.get_profiling_info<info::event_profiling::command_end>();
       double total_time = (end_time - start_time)* 1e-6; // ns to ms
       run_times[i] = total_time;
-      copyToHost(q,DistanceDevice,distances[i]);
-    sycl::free(OffsetDevice, q);
-    sycl::free(EdgesDevice, q);
-    sycl::free(DistanceDevice, q);
-    sycl::free(VisitDevice, q);
-    sycl::free(VisitMaskDevice, q);
+      // copyToHost(Q1,DistanceDevice,distances[i]);
+      copyToHost(Q2,DistanceDeviceQ,distances[i]);
+    sycl::free(OffsetDevice, Q1);
+    sycl::free(EdgesDevice, Q1);
+    sycl::free(DistanceDevice, Q1);
+    sycl::free(VisitDevice, Q1);
+    sycl::free(VisitMaskDevice, Q1);
 
     } // for loop num_runs
 
     // copy VisitDevice back to hostArray
-    // q.memcpy(&DistanceHost[0], DistanceDevice, DistanceHost.size() * sizeof(int));
-    // copyToHost(q,DistanceDevice,DistanceHost);
-    q.wait();
+    // Q1.memcpy(&DistanceHost[0], DistanceDevice, DistanceHost.size() * sizeof(int));
+    // copyToHost(Q1,DistanceDevice,DistanceHost);
+    Q1.wait();
      DistanceHost = distances[num_runs-1];
-    // sycl::free(OffsetDevice, q);
-    // sycl::free(usm_nodes_end, q);
-    // sycl::free(EdgesDevice, q);
-    // sycl::free(DistanceDevice, q);
-    // sycl::free(VisitDevice, q);
-    // sycl::free(VisitMaskDevice, q);
-    // sycl::free(usm_mask, q);
+    // sycl::free(OffsetDevice, Q1);
+    // sycl::free(usm_nodes_end, Q1);
+    // sycl::free(EdgesDevice, Q1);
+    // sycl::free(DistanceDevice, Q1);
+    // sycl::free(VisitDevice, Q1);
+    // sycl::free(VisitMaskDevice, Q1);
+    // sycl::free(usm_mask, Q1);
     // Check if each distances[i] is equal to DistanceHost
     bool all_match_host = true;
     for(int i =0; i < num_runs; i++){
