@@ -5,26 +5,29 @@
 #include <stdexcept>
 // CSR structure to hold the graph
 struct CSRGraph {
-    std::vector<Uint32> meta;	
+    // Use single vectors for when partitionCount is 1
+    std::vector<Uint32> meta;
     std::vector<Uint32> indptr;
     std::vector<Uint32> inds;
 
-	std::vector<Uint32> metaOffsets;
-    std::vector<Uint32> indptrOffsets;
-    std::vector<Uint32> indsOffsets;
+    // Use vectors of vectors for when partitionCount is greater than 1
+    std::vector<std::vector<Uint32>> metaMulti;
+    std::vector<std::vector<Uint32>> indptrMulti;
+    std::vector<std::vector<Uint32>> indsMulti;
+
+    // Flag to check if we're using multi-dimensional vectors
+    bool isMultiDimensional = false;
 };
 
 void readFromMM(const char *filename, std::vector<Uint32> &buffer) {
     std::cout << "Reading " << filename << "..." ;
 
-    // Open the file:
     std::ifstream file(filename, std::ios::binary);
     if (!file) {
         std::cerr << "ERROR: File " << filename << " not found!" << std::endl;
         throw std::runtime_error("File not found");
     }
 
-    // Get file size:
     file.seekg(0, std::ios::end);
     std::streampos fileSize = file.tellg();
     file.seekg(0, std::ios::beg);
@@ -44,38 +47,39 @@ void readFromMM(const char *filename, std::vector<Uint32> &buffer) {
 
 CSRGraph loadMatrix(Uint32 partitionCount, std::string datasetName) {
     CSRGraph graph;
-    std::cout << "Loading matrix " << datasetName << " with " << partitionCount << " partitions.." << std::endl;
+    std::cout << "Loading matrix " << datasetName << " with " << partitionCount << " partitions..." << std::endl;
     
     std::string pth = "/dataset/";
     std::string non_switch = getenv("PWD") + pth;
     std::string temp = datasetName;
     non_switch += temp + "-csc-" + std::to_string(partitionCount) + "/" + temp + "-csc-";
 
-    for (Uint32 i = 0; i < partitionCount; i++) {
-        CSRGraph singleGraph;
-
-        // Record the original sizes before loading new data
-        graph.metaOffsets.push_back(graph.meta.size());
-        graph.indptrOffsets.push_back(graph.indptr.size());
-        graph.indsOffsets.push_back(graph.inds.size());
-
-
-        std::string str_meta = non_switch + std::to_string(i) + "-meta.bin";
-        std::string str_indptr = non_switch + std::to_string(i) + "-indptr.bin";
-        std::string str_inds = non_switch + std::to_string(i) + "-inds.bin";
+    if (partitionCount == 1) {
+        // Load data into single-dimensional vectors
+        std::string str_meta = non_switch + "0-meta.bin";
+        std::string str_indptr = non_switch + "0-indptr.bin";
+        std::string str_inds = non_switch + "0-inds.bin";
         
-        readFromMM(str_meta.c_str(), singleGraph.meta);
-        readFromMM(str_indptr.c_str(), singleGraph.indptr);
-        readFromMM(str_inds.c_str(), singleGraph.inds);
+        readFromMM(str_meta.c_str(), graph.meta);
+        readFromMM(str_indptr.c_str(), graph.indptr);
+        readFromMM(str_inds.c_str(), graph.inds);
+    } else {
+        // Use multi-dimensional vectors for multiple partitions
+        graph.isMultiDimensional = true;
+        graph.metaMulti.resize(partitionCount);
+        graph.indptrMulti.resize(partitionCount);
+        graph.indsMulti.resize(partitionCount);
 
-        graph.meta.insert(graph.meta.end(), singleGraph.meta.begin(), singleGraph.meta.end());
-        graph.indptr.insert(graph.indptr.end(), singleGraph.indptr.begin(), singleGraph.indptr.end());
-        graph.inds.insert(graph.inds.end(), singleGraph.inds.begin(), singleGraph.inds.end());
+        for (Uint32 i = 0; i < partitionCount; i++) {
+            std::string str_meta = non_switch + std::to_string(i) + "-meta.bin";
+            std::string str_indptr = non_switch + std::to_string(i) + "-indptr.bin";
+            std::string str_inds = non_switch + std::to_string(i) + "-inds.bin";
+            
+            readFromMM(str_meta.c_str(), graph.metaMulti[i]);
+            readFromMM(str_indptr.c_str(), graph.indptrMulti[i]);
+            readFromMM(str_inds.c_str(), graph.indsMulti[i]);
+        }
     }
-	// // Record the original sizes after loading new data [final size]
-	// graph.metaOffsets.push_back(graph.meta.size());
-	// graph.indptrOffsets.push_back(graph.indptr.size());
-	// graph.indsOffsets.push_back(graph.inds.size());
 
     return graph;
 }

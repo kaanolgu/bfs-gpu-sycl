@@ -119,24 +119,22 @@ int main(int argc, char * argv[])
   std::cout << "######################LOADING MATRIX#########################" << std::endl;
   CSRGraph graph = loadMatrix(num_gpus,datasetName);
 
-    // Example: Use the offsets to determine where data from each partition starts
-    for (size_t i = 0; i < graph.metaOffsets.size(); ++i) {
-        std::cout << "Partition " << i << " starts at meta offset: " << graph.metaOffsets[i] << std::endl;
-        std::cout << "Partition " << i << " starts at indptr offset: " << graph.indptrOffsets[i] << std::endl;
-        std::cout << "Partition " << i << " starts at inds offset: " << graph.indsOffsets[i] << std::endl;
-    }
 
 
   CSRGraph graph_cpu = loadMatrix(1,datasetName);
   std::cout << "#############################################################\n" << std::endl;
-  numCols = graph.meta[1];  // cols -> total number of vertices
+  numCols = graph_cpu.meta[1];  // cols -> total number of vertices
   std::cout << "number of vertices "<< numCols << std::endl;
   ////////////
   // FPGA
   ///////////
+  // Dummy example total neighbours needs to be 74
+  for(int i = 0; i < num_gpus; i++){
+  std::cout << "i: " << start_vertex<< ", num_Neighbours: "<< (graph.indptrMulti[i][start_vertex+1] - graph.indptrMulti[i][start_vertex]) << std::endl;
+  std::cout << "i: " << 135368<< ", num_Neighbours: "<< (graph.indptrMulti[i][135368+1] - graph.indptrMulti[i][135368]) << std::endl;
+  }
 
-  std::cout << "i: " << 135368<< ", num_Neighbours: "<< (graph.indptr[135368+1] - graph.indptr[135368]) << std::endl;
-std::cout << "begin addr : " << graph.indptr[135368] << std::endl;
+std::cout << "begin addr : " << graph.indptrMulti[0][135368] << std::endl;
   
 
   // allocate mem for the result on host side
@@ -163,8 +161,8 @@ std::cout << "begin addr : " << graph.indptr[135368] << std::endl;
   int indptr_end = old_buffer_size_indptr[1];
   int inds_end = old_buffer_size_inds[1];
   // initalize the memory
-  int numEdges  = graph.meta[2];  // nonZ count -> total edges
-  numRows  = graph.meta[0];  // this it the value we want! (rows)
+  int numEdges  = graph_cpu.meta[2];  // nonZ count -> total edges
+  numRows  = graph_cpu.meta[0];  // this it the value we want! (rows)
   // Sanity Check if we loaded the graph properly
   assert(numRows <= numCols);
     std::cout << "number of vertices "<< numCols << std::endl;
@@ -173,13 +171,11 @@ std::cout << "begin addr : " << graph.indptr[135368] << std::endl;
   std::cout << "number of vertices "<< numCols << std::endl;
 
   GPURun(numRows,
-                  graph.inds,
-                  graph.indptr,
+                  graph.indsMulti,
+                  graph.indptrMulti,
                   h_updating_graph_mask,
                   h_graph_visited,
                   h_dist,
-                  graph.indptrOffsets,
-                  graph.indsOffsets,
                   start_vertex,numEdges,
                   num_runs);  
 
