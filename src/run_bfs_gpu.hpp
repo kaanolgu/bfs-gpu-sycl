@@ -547,7 +547,7 @@ void GPURun(int vertexCount,
     copyToDevice(Q2,VisitHost,VisitDeviceQ);
     double start_time = 0;
     double end_time = 0;
-    for(int iteration=0; iteration < 2; iteration++){
+    for(int iteration=0; iteration < MAX_NUM_LEVELS; iteration++){
       if(frontierCountHost[0] == 0){
         std::cout << "total number of iterations" << iteration << "\n";
         break;
@@ -563,12 +563,26 @@ void GPURun(int vertexCount,
       levelEventQ =parallel_levelgen_kernel(Q2,vertexCount,DistanceDeviceQ,VisitMaskDeviceQ,VisitDeviceQ,iteration,FrontierDeviceQ,frontierCountDeviceQ);
       Q1.wait();
       Q2.wait();
-      // copyToHost(Q1,frontierDevice,frontierHostQ1);
-      // copyToHost(Q2,frontierDeviceQ,frontierHostQ2);
+
       copyToHost(Q1,frontierCountDevice,frontierCountHostQ1);
       copyToHost(Q2,frontierCountDeviceQ,frontierCountHostQ2);
       Q1.wait();
       Q2.wait();
+      copyToHost(Q1,FrontierDevice,FrontierHostQ1);
+      copyToHost(Q2,FrontierDeviceQ,FrontierHostQ2);
+      Q1.wait();
+      Q2.wait();
+      for(int itr=0; itr < frontierCountHostQ1[0]; itr++)
+      FrontierHost[itr] = FrontierHostQ1[itr];
+
+      for(int itr=frontierCountHostQ1[0]; itr < frontierCountHostQ1[0] + frontierCountHostQ2[0]; itr++)
+        FrontierHost[itr] = FrontierHostQ2[itr - frontierCountHostQ1[0]];
+
+      copyToDevice(Q1,FrontierHost,FrontierDevice);
+      copyToDevice(Q2,FrontierHost,FrontierDeviceQ);
+      Q1.wait();
+      Q2.wait();
+
       frontierCountHost[0] = frontierCountHostQ1[0] + frontierCountHostQ2[0];
       // frontierHost.reserve(frontierCountHost[0])
       // frontierHostQ1.insert(frontierHostQ1.end(), frontierHostQ2.begin(), frontierHostQ2.end());
