@@ -130,16 +130,26 @@ int upper_bound(const sycl::local_accessor<T> &arr, int n, int value) {
 //-------------------------------------------------------------------
 template<int ITEMS_PER_THREAD>
 event parallel_explorer_kernel(queue &q,
-                                int V, // number of vertices
+                                std::vector<Uint32>& prefix_sum,
                                 Uint32 iteration,
                                 Uint32* usm_nodes_start,
                                 Uint32 *usm_edges,
-                                Uint32* usm_pipe,
-                                Uint32 *usm_pipe_size,
+                                std::vector<Uint32>& frontier_h,
+                                std::vector<Uint32>& frontier_l,
                                 MyUint1 *usm_visit_mask,
                                 Uint32 *usm_dist,
                                 MyUint1 *usm_visit)
     {
+
+      // Prepare Data 
+      const int V = prefix_sum.back();
+      Uint32 *usm_prefix_sum      = malloc_device<Uint32>(prefix_sum.size(), q); 
+      copyToDevice(q,prefix_sum,usm_prefix_sum);
+
+      Uint32 *usm_pipe_1      = malloc_device<Uint32>(frontier_h.size(), q); 
+      Uint32 *usm_pipe_2      = malloc_device<Uint32>(frontier_l.size(), q);
+      copyToDevice(q,frontier_h,usm_pipe_1);
+      copyToDevice(q,frontier_l,usm_pipe_2);
 
     // Define the work-group size and the number of work-groups
     const size_t local_size = THREADS_PER_BLOCK;  // Number of work-items per work-group
@@ -172,14 +182,29 @@ event parallel_explorer_kernel(queue &q,
           Uint32 local_th_deg; // this variable is shared between workitems
         // this variable will be instantiated for each work-item separately
 
-            if (gid < V) {
-                v = usm_pipe[gid];
-                sedges[lid] = DevicePtr_start[v];
-                local_th_deg =DevicePtr_end[v] - DevicePtr_start[v];
-            }
-            else {
-                local_th_deg = 0;
-            }
+        // Determine which pipe to read from based on gid
+        //  if (gid < V) {
+        //         v = usm_pipe_1[gid];
+        //         sedges[lid] = DevicePtr_start[v];
+        //         local_th_deg =DevicePtr_end[v] - DevicePtr_start[v];
+        //     }
+        //     else {
+        //         local_th_deg = 0;
+        //     }
+
+        if (gid < usm_prefix_sum[1]) {
+            // Read from usm_pipe
+            v = usm_pipe_1[gid];
+            sedges[lid] = DevicePtr_start[v]; // Store in sedges at the correct global index
+            local_th_deg = DevicePtr_end[v] - DevicePtr_start[v]; // Assuming this is how you're calculating degree
+        } else if (gid < usm_prefix_sum[2]) {
+            // Read from usm_pipe_2  
+            v = usm_pipe_2[gid -  usm_prefix_sum[1]]; // Adjust index for usm_pipe_2
+            sedges[lid] = DevicePtr_start[v]; // Store in sedges at the correct global index
+            local_th_deg = DevicePtr_end[v] - DevicePtr_start[v]; // Assuming this is how you're calculating degree
+        } else {
+            local_th_deg = 0;
+        }
           // sycl::group_barrier(item.get_group());
 
           // 2. Exclusive sum of degrees to find total work items per block.
@@ -215,7 +240,8 @@ event parallel_explorer_kernel(queue &q,
         
     });
         });
-    
+
+
 return e;
 }
 
@@ -340,72 +366,7 @@ event parallel_levelgen_kernel(queue &q,
 return e;
 }
 
-event pipegen_kernel(queue &q,
-                                int V,
-                                Uint32 *usm_pipe,
-                                Uint32 *usm_pipe_size,
-                                MyUint1 *usm_visit_mask
-                                 ){
-                                  
-
-
-
           
-  
-    const size_t local_size = THREADS_PER_BLOCK;  // Number of work-items per work-group
-    const size_t global_size = ((V + local_size - 1) / local_size) * local_size;
-
-    // Setup the range
-    nd_range<1> range(global_size, local_size);
-
-        auto e = q.parallel_for<class PipeGenerator>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
-          int gid = item.get_global_id();
-          sycl::atomic_ref<Uint32, sycl::memory_order_relaxed,
-          sycl::memory_scope_device,sycl::access::address_space::global_space>
-          atomic_op_global(usm_pipe_size[0]);
-      
-          // TODO
-          // blockscan here to findd the total elements to insert frontier
-          // then another grid-stride loop to write frontier 
-          if (gid < V) {
-              if(usm_visit_mask[gid]){
-                // usm_pipe[atomic_op_global.fetch_add(1)] = gid;
-                usm_visit_mask[gid]=0;
-              }
-            
-            } 
-        
-
-        });
-
-return e;
-}
-                                 
-
-event maskremove_kernel(queue &q,
-                        int V, // number of vertices
-                        MyUint1 *usm_visit_mask
-                                 ){
-                                  
-   // Define the work-group size and the number of work-groups
-    const size_t local_size = THREADS_PER_BLOCK;  // Number of work-items per work-group
-    const size_t global_size = ((V + local_size - 1) / local_size) * local_size;
-
-    // Setup the range
-    nd_range<1> range(global_size, local_size);
-
-        auto e = q.parallel_for<class MaskRemove>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
-        int gid = item.get_global_id();
-        if (gid < V) {
-            if(usm_visit_mask[gid]){
-              usm_visit_mask[gid]=0;  
-           }
-          }
-
-        });
-
-return e;
-}
 
 
 //----------------------------------------------------------
@@ -509,15 +470,27 @@ void GPURun(int vertexCount,
     int zero = 0;
     for(int i =0; i < num_runs; i++){
       // Frontier Start
-      std::vector<Uint32> frontierCountHost(1,1);
       std::vector<Uint32> frontierCountHostQ1(1,1);
       std::vector<Uint32> frontierCountHostQ2(1,1);
-      std::vector<Uint32> FrontierHost(vertexCount,0);
+
       std::vector<Uint32> FrontierHostQ1(vertexCount,0);
       std::vector<Uint32> FrontierHostQ2(vertexCount,0);
-      FrontierHost[0] = sourceNode;
+
+      std::vector<Uint32> h_prefix_sum = {0,1,2};
+
+      FrontierHostQ1[0] = sourceNode;
+      FrontierHostQ2[0] = sourceNode;
       // Frontier End
-    Uint32 *FrontierDevice      = malloc_device<Uint32>(FrontierHost.size(), Q1); 
+       Uint32 *usm_pipe_global_h = malloc_device<Uint32>(vertexCount, Q1);
+       Uint32 *usm_pipe_global_l = malloc_device<Uint32>(vertexCount, Q2);
+
+    // // Create a vector to store the USM pointers
+    // std::vector<Uint32*> usm_pipes_Q1;
+
+    // // Add the USM pointers to the vector
+    // usm_pipes_Q1.push_back(usm_pipe_1);
+    // usm_pipes_Q1.push_back(usm_pipe_2);
+
     Uint32 *frontierCountDevice = malloc_device<Uint32>(1, Q1);
     Uint32* OffsetDevice        = malloc_device<Uint32>(OffsetHost[0].size(), Q1);
     Uint32 *EdgesDevice         = malloc_device<Uint32>(IndexHost[0].size(), Q1); 
@@ -525,21 +498,22 @@ void GPURun(int vertexCount,
     MyUint1 *VisitMaskDevice    = malloc_device<MyUint1>(VisitMaskHost.size(), Q1); 
     MyUint1 *VisitDevice      = malloc_device<MyUint1>(VisitHost.size(), Q1); 
 
-    Uint32 *FrontierDeviceQ      = malloc_device<Uint32>(FrontierHost.size(), Q2); 
+
     Uint32 *frontierCountDeviceQ = malloc_device<Uint32>(1, Q2);
     Uint32* OffsetDeviceQ        = malloc_device<Uint32>(OffsetHost[1].size(), Q2);
     Uint32 *EdgesDeviceQ         = malloc_device<Uint32>(IndexHost[1].size(), Q2); 
     Uint32 *DistanceDeviceQ      = malloc_device<Uint32>(DistanceHost.size(), Q2); 
     MyUint1 *VisitMaskDeviceQ    = malloc_device<MyUint1>(VisitMaskHost.size(), Q2); 
     MyUint1 *VisitDeviceQ      = malloc_device<MyUint1>(VisitHost.size(), Q2); 
-    copyToDevice(Q1,FrontierHost,FrontierDevice);
+    
+
     copyToDevice(Q1,IndexHost[0],EdgesDevice);
     copyToDevice(Q1,OffsetHost[0],OffsetDevice);
     copyToDevice(Q1,distances[i],DistanceDevice);
     copyToDevice(Q1,VisitMaskHost,VisitMaskDevice);
     copyToDevice(Q1,VisitHost,VisitDevice);
 
-    copyToDevice(Q2,FrontierHost,FrontierDeviceQ);
+
     copyToDevice(Q2,IndexHost[1],EdgesDeviceQ);
     copyToDevice(Q2,OffsetHost[1],OffsetDeviceQ);
     copyToDevice(Q2,distancesQ[i],DistanceDeviceQ);
@@ -548,44 +522,47 @@ void GPURun(int vertexCount,
     double start_time = 0;
     double end_time = 0;
     for(int iteration=0; iteration < MAX_NUM_LEVELS; iteration++){
-      if(frontierCountHost[0] == 0){
+      if(h_prefix_sum[2] == 0){
         std::cout << "total number of iterations" << iteration << "\n";
         break;
       }    
       Q1.memcpy(frontierCountDevice, &zero, sizeof(Uint32)).wait();  
       Q2.memcpy(frontierCountDeviceQ, &zero, sizeof(Uint32)).wait();  
-      exploreEvent = parallel_explorer_kernel<1>(Q1,frontierCountHost[0],iteration,OffsetDevice,EdgesDevice,FrontierDevice,frontierCountDevice, VisitMaskDevice,DistanceDevice,VisitDevice);
-      exploreEventQ = parallel_explorer_kernel<1>(Q2,frontierCountHost[0],iteration,OffsetDeviceQ,EdgesDeviceQ,FrontierDeviceQ,frontierCountDeviceQ, VisitMaskDeviceQ,DistanceDeviceQ,VisitDeviceQ);
+      exploreEvent = parallel_explorer_kernel<1>(Q1,h_prefix_sum,iteration,OffsetDevice,EdgesDevice,FrontierHostQ1,FrontierHostQ2, VisitMaskDevice,DistanceDevice,VisitDevice);
+      exploreEventQ = parallel_explorer_kernel<1>(Q2,h_prefix_sum,iteration,OffsetDeviceQ,EdgesDeviceQ,FrontierHostQ1,FrontierHostQ2, VisitMaskDeviceQ,DistanceDeviceQ,VisitDeviceQ);
       Q1.wait();
       Q2.wait();
-      // Level Generate
-      levelEvent =parallel_levelgen_kernel(Q1,vertexCount,DistanceDevice,VisitMaskDevice,VisitDevice,iteration,FrontierDevice,frontierCountDevice);
-      levelEventQ =parallel_levelgen_kernel(Q2,vertexCount,DistanceDeviceQ,VisitMaskDeviceQ,VisitDeviceQ,iteration,FrontierDeviceQ,frontierCountDeviceQ);
+      
+      // // Level Generate
+      // // FIXME!
+      levelEvent =parallel_levelgen_kernel(Q1,vertexCount,DistanceDevice,VisitMaskDevice,VisitDevice,iteration,usm_pipe_global_h,frontierCountDevice);
+      levelEventQ =parallel_levelgen_kernel(Q2,vertexCount,DistanceDeviceQ,VisitMaskDeviceQ,VisitDeviceQ,iteration,usm_pipe_global_l,frontierCountDeviceQ);
       Q1.wait();
       Q2.wait();
+
+
 
       copyToHost(Q1,frontierCountDevice,frontierCountHostQ1);
       copyToHost(Q2,frontierCountDeviceQ,frontierCountHostQ2);
-      Q1.wait();
-      Q2.wait();
-      copyToHost(Q1,FrontierDevice,FrontierHostQ1);
-      copyToHost(Q2,FrontierDeviceQ,FrontierHostQ2);
-      Q1.wait();
-      Q2.wait();
-      for(int itr=0; itr < frontierCountHostQ1[0]; itr++)
-      FrontierHost[itr] = FrontierHostQ1[itr];
+      // std::cout << "frontierCountHostQ1 : " << frontierCountHostQ1[0] << ", frontierCountHostQ2 : " << frontierCountHostQ2[0] << std::endl;
+      // Q1.wait();
+      // Q2.wait();
+      copyToHost(Q1,usm_pipe_global_h,FrontierHostQ1);
+      copyToHost(Q2,usm_pipe_global_l,FrontierHostQ2);
+      // Q1.wait();
+      // Q2.wait();
 
-      for(int itr=frontierCountHostQ1[0]; itr < frontierCountHostQ1[0] + frontierCountHostQ2[0]; itr++)
-        FrontierHost[itr] = FrontierHostQ2[itr - frontierCountHostQ1[0]];
+      // copyToDevice(Q1,FrontierHost,usm_pipe_1a);
+      // copyToDevice(Q2,FrontierHost,usm_pipe_2b);
+      // Q1.wait();
+      // Q2.wait();
 
-      copyToDevice(Q1,FrontierHost,FrontierDevice);
-      copyToDevice(Q2,FrontierHost,FrontierDeviceQ);
-      Q1.wait();
-      Q2.wait();
+      h_prefix_sum[0] = 0;
+      h_prefix_sum[1] = frontierCountHostQ1[0];
+      h_prefix_sum[2] = frontierCountHostQ1[0] + frontierCountHostQ2[0];
 
-      frontierCountHost[0] = frontierCountHostQ1[0] + frontierCountHostQ2[0];
-      // frontierHost.reserve(frontierCountHost[0])
-      // frontierHostQ1.insert(frontierHostQ1.end(), frontierHostQ2.begin(), frontierHostQ2.end());
+  
+
       // Capture execution times 
       exploreDuration += GetExecutionTime(exploreEvent);
       levelDuration   += GetExecutionTime(levelEvent);
@@ -596,7 +573,6 @@ void GPURun(int vertexCount,
       // Increase the level by 1 
       // if(iteration == 0)
       // start_time = exploreEvent.get_profiling_info<info::event_profiling::command_start>();
-      // Q2.wait_and_throw();
     }
       // end_time = levelEvent.get_profiling_info<info::event_profiling::command_end>();
       double total_time = (end_time - start_time)* 1e-6; // ns to ms
@@ -608,11 +584,13 @@ void GPURun(int vertexCount,
 
 
     sycl::free(OffsetDevice, Q1);
+    sycl::free(usm_pipe_global_h, Q1);
     sycl::free(EdgesDevice, Q1);
     sycl::free(DistanceDevice, Q1);
     sycl::free(VisitDevice, Q1);
     sycl::free(VisitMaskDevice, Q1);
 
+    sycl::free(usm_pipe_global_l, Q2);
     sycl::free(OffsetDeviceQ, Q2);
     sycl::free(EdgesDeviceQ, Q2);
     sycl::free(DistanceDeviceQ, Q2);
