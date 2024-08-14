@@ -11,6 +11,7 @@ using namespace sycl;
 
 #define MAX_NUM_LEVELS 100
 
+
 // |  Memory Model Equivalence
 // |  CUDA                 SYCL
 // +------------------------------------+
@@ -128,7 +129,10 @@ int upper_bound(const sycl::local_accessor<T> &arr, int n, int value) {
 //-- initialize Kernel for Exploring the neighbours of next to visit 
 //-- nodes
 //-------------------------------------------------------------------
-template<int ITEMS_PER_THREAD>
+template <int krnl_id> class ExploreNeighbours;
+template <int krnl_id> class LevelGen;
+
+template <int krnl_id>
 event parallel_explorer_kernel(queue &q,
                                 std::vector<Uint32>& prefix_sum,
                                 Uint32 iteration,
@@ -137,7 +141,6 @@ event parallel_explorer_kernel(queue &q,
                                 Uint32* usm_pipe_1,
                                 Uint32* usm_pipe_2,
                                 MyUint1 *usm_visit_mask,
-                                Uint32 *usm_dist,
                                 MyUint1 *usm_visit)
     {
 
@@ -164,7 +167,7 @@ event parallel_explorer_kernel(queue &q,
             // sycl::local_accessor<Uint32> vertices(local_size, h);
             sycl::local_accessor<Uint32> sedges(local_size, h);
             sycl::local_accessor<Uint32> degrees(local_size, h);
-          h.parallel_for<class ExploreNeighbours>(range, [=](nd_item<1> item) {
+          h.parallel_for<class ExploreNeighbours<krnl_id>>(range, [=](nd_item<1> item) {
             const int gid = item.get_global_id(0);    // global id
             const int lid  = item.get_local_id(0); // threadIdx.x
             const int blockIdx  = item.get_group(0); // blockIdx.x
@@ -233,6 +236,7 @@ event parallel_explorer_kernel(queue &q,
 
       if(!usm_visit[n]){
         usm_visit_mask[n] = 1;
+        usm_visit[n] = 1;
       }
     } 
           
@@ -244,7 +248,7 @@ event parallel_explorer_kernel(queue &q,
 }
 
 
-
+template <int krnl_id>
 event parallel_levelgen_kernel(queue &q,
                                 int V,
                                 Uint32 *usm_dist,
@@ -269,7 +273,7 @@ event parallel_levelgen_kernel(queue &q,
                     // sycl::local_accessor<Uint32> degrees(local_size, h);
                     // sycl::local_accessor<Uint32> vertices(local_size, h);
           // sycl::local_accessor<int> local_counter(1, h);
-        h.parallel_for<class LevelGen>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
+        h.parallel_for<class LevelGen<krnl_id>>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
           const int gid = item.get_global_id(0);    // global id
           const int lid  = item.get_local_id(0); // threadIdx.x
           const int blockIdx  = item.get_group(0); // blockIdx.x
@@ -283,7 +287,7 @@ event parallel_levelgen_kernel(queue &q,
             if(vmask == 1){
 
               usm_dist[gid] = iteration + 1;  
-                usm_visit[gid] = 1;
+                // usm_visit[gid] = 1;
                                 sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,
             sycl::memory_scope::device, 
             sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
@@ -366,7 +370,6 @@ return e;
 
           
 
-
 //----------------------------------------------------------
 //--breadth first search on FPGA
 //----------------------------------------------------------
@@ -394,61 +397,62 @@ void GPURun(int vertexCount,
 #endif
 
 
+
   sycl::queue q{device_selector,
                 sycl::property::queue::enable_profiling{}};
   std::cout << "Device: " << q.get_device().get_info<sycl::info::device::name>()
             << std::endl;
 
+
+
+
   try {
-    auto devs = sycl::device::get_devices(info::device_type::gpu);
+  //   auto devs = sycl::device::get_devices(info::device_type::gpu);
 
-    auto Q1 = sycl::queue{devs[0],
-                sycl::property::queue::enable_profiling{}};
-    auto Q2 = sycl::queue{devs[1],
-                sycl::property::queue::enable_profiling{}}; // if only one device is found, both queues
-                                    // will use same device
+  //   auto Queues[0] = sycl::queue{devs[0],
+  //               sycl::property::queue::enable_profiling{}};
+  //   auto Queues[1] = sycl::queue{devs[1],
+  //               sycl::property::queue::enable_profiling{}}; // if only one device is found, both queues
+  //                                   // will use same device
 
-   std::cout << "Running on devices:" << std::endl;
-    std::cout << "1:\t" << Q1.get_device().get_info<sycl::info::device::name>()
+  //  std::cout << "Running on devices:" << std::endl;
+  //   std::cout << "1:\t" << Queues[0].get_device().get_info<sycl::info::device::name>()
+  //             << std::endl;
+  //   std::cout << "2:\t" << Queues[1].get_device().get_info<sycl::info::device::name>()
+  //             << std::endl;
+
+
+
+  auto Devs = sycl::device::get_devices(info::device_type::gpu);
+
+  if (Devs.size() < 2) {
+    std::cout << "Cannot test P2P capabilities, at least two devices are "
+                 "required, exiting."
               << std::endl;
-    std::cout << "2:\t" << Q2.get_device().get_info<sycl::info::device::name>()
+
+  }
+
+  std::vector<sycl::queue> Queues;
+  std::transform(Devs.begin(), Devs.end(), std::back_inserter(Queues),
+                 [](const sycl::device &D) { return sycl::queue{D,sycl::property::queue::enable_profiling{}}; });
+  ////////////////////////////////////////////////////////////////////////
+
+  if (!Devs[0].ext_oneapi_can_access_peer(
+          Devs[1], sycl::ext::oneapi::peer_access::access_supported)) {
+    std::cout << "P2P access is not supported by devices, exiting."
               << std::endl;
-    // Create a queue bound to the chosen device.
-    // If the device is unavailable, a SYCL runtime exception is thrown.
-    // queue q(device_selector, fpga_tools::exception_handler, prop_list);
-    // std::vector<sycl::device> devs = sycl::device::get_devices();
-    // std::cout << "Available" << devs.size() << " devices: " << std::endl;
-    // for(int i =0; i < devs.size(); i++){
-      // std::cout <<i << ":\t" << sycl::queue{devs[i]}.get_device().get_info<sycl::info::device::name>()
-              // << std::endl;
-    // }
 
-    // auto Q1 = sycl::queue{devs[1]}; // [opencl:cpu:1] Intel(R) OpenCL, AMD EPYC 7742 64-Core Processor OpenCL 3.0 (Build 0) [2023.THREADS_PER_BLOCK.10.0.17_160000]
-    // auto q = sycl::queue{devs[2]}; //  [ext_oneapi_cuda:gpu:0] NVIDIA CUDA BACKEND, NVIDIA A100-SXM4-40GB 8.0 [CUDA 12.2]
+  }
 
-    // std::cout << "Running on devices: " << std::endl;
-    // std::cout << "1:\t" << Q1.get_device().get_info<sycl::info::device::name>()
-    //           << std::endl;
-    // std::cout << "2:\t" << q.get_device().get_info<sycl::info::device::name>()
-              // << std::endl;
-              
-    // Print out the device information.
-    std::cout << "Running on device: "
-              << q.get_device().get_info<info::device::name>() << "\n";
+    std::cout << "Running on devices:" << std::endl;
+    for(int i =0; i < Queues.size(); i++){
 
-    // FrontierHost[1] = 87;
+    std::cout << i << ":\t" << Queues[i].get_device().get_info<sycl::info::device::name>()
+              << std::endl;
+    }
 
-
-    // Uint32* OffsetDevice      = malloc_device<Uint32>(OffsetHost.size(), q);
-  
-    // Uint32 *EdgesDevice       = malloc_device<Uint32>(IndexHost.size(), q); 
-
-
-    // copyToDevice(q,IndexHost,EdgesDevice);
-    // copyToDevice(q,OffsetHost,OffsetDevice);
-
-
-
+  // Enables Devs[0] to access Devs[1] memory.
+    Devs[0].ext_oneapi_enable_peer_access(Devs[1]);
 
 
 
@@ -472,17 +476,25 @@ void GPURun(int vertexCount,
       std::vector<Uint32> frontierCountHostQ2(1,1);
 
       std::vector<Uint32> FrontierHostQ1(vertexCount,0);
+      FrontierHostQ1[0] = sourceNode;
       std::vector<Uint32> FrontierHostQ2(vertexCount,0);
+      FrontierHostQ2[0] = sourceNode;
 
       std::vector<Uint32> h_prefix_sum = {0,1,2};
 
-      FrontierHostQ1[0] = sourceNode;
-      FrontierHostQ2[0] = sourceNode;
+
       // Frontier End
-       Uint32 *usm_pipe_global_h = malloc_device<Uint32>(vertexCount, Q1);
-       Uint32 *usm_pipe_global_h_mirror = malloc_device<Uint32>(vertexCount, Q2);
-       Uint32 *usm_pipe_global_l_mirror = malloc_device<Uint32>(vertexCount, Q1);
-       Uint32 *usm_pipe_global_l = malloc_device<Uint32>(vertexCount, Q2);
+      //  Uint32 *usm_pipe_global_h = malloc_device<Uint32>(vertexCount, Queues[0]);
+
+      Uint32 *usm_pipe_global_h = malloc<Uint32>(vertexCount, Queues[0], usm::alloc::device);
+      Uint32 *usm_pipe_global_l = malloc<Uint32>(vertexCount, Queues[1], usm::alloc::device);
+
+      Uint32 *usm_pipe_global_h_mirror = malloc<Uint32>(vertexCount, Queues[1], usm::alloc::device);
+      Uint32 *usm_pipe_global_l_mirror = malloc<Uint32>(vertexCount, Queues[0], usm::alloc::device);
+
+      //  Uint32 *usm_pipe_global_h_mirror = malloc_device<Uint32>(vertexCount, Queues[1]);
+      //  Uint32 *usm_pipe_global_l_mirror = malloc_device<Uint32>(vertexCount, Queues[0]);
+      //  Uint32 *usm_pipe_global_l = malloc_device<Uint32>(vertexCount, Queues[1]);
 
     // // Create a vector to store the USM pointers
     // std::vector<Uint32*> usm_pipes_Q1;
@@ -491,36 +503,41 @@ void GPURun(int vertexCount,
     // usm_pipes_Q1.push_back(usm_pipe_1);
     // usm_pipes_Q1.push_back(usm_pipe_2);
 
-    Uint32 *frontierCountDevice = malloc_device<Uint32>(1, Q1);
-    Uint32* OffsetDevice        = malloc_device<Uint32>(OffsetHost[0].size(), Q1);
-    Uint32 *EdgesDevice         = malloc_device<Uint32>(IndexHost[0].size(), Q1); 
-    Uint32 *DistanceDevice      = malloc_device<Uint32>(DistanceHost.size(), Q1); 
-    MyUint1 *VisitMaskDevice    = malloc_device<MyUint1>(VisitMaskHost.size(), Q1); 
-    MyUint1 *VisitDevice      = malloc_device<MyUint1>(VisitHost.size(), Q1); 
+    Uint32 *frontierCountDevice = malloc_device<Uint32>(1, Queues[0]);
+    Uint32* OffsetDevice        = malloc_device<Uint32>(OffsetHost[0].size(), Queues[0]);
+    Uint32 *EdgesDevice         = malloc_device<Uint32>(IndexHost[0].size(), Queues[0]); 
+    Uint32 *DistanceDevice      = malloc_device<Uint32>(DistanceHost.size(), Queues[0]); 
+    MyUint1 *VisitMaskDevice    = malloc_device<MyUint1>(VisitMaskHost.size(), Queues[0]); 
+    MyUint1 *VisitDevice        = malloc_device<MyUint1>(VisitHost.size(), Queues[0]); 
 
 
-    Uint32 *frontierCountDeviceQ = malloc_device<Uint32>(1, Q2);
-    Uint32* OffsetDeviceQ        = malloc_device<Uint32>(OffsetHost[1].size(), Q2);
-    Uint32 *EdgesDeviceQ         = malloc_device<Uint32>(IndexHost[1].size(), Q2); 
-    Uint32 *DistanceDeviceQ      = malloc_device<Uint32>(DistanceHost.size(), Q2); 
-    MyUint1 *VisitMaskDeviceQ    = malloc_device<MyUint1>(VisitMaskHost.size(), Q2); 
-    MyUint1 *VisitDeviceQ      = malloc_device<MyUint1>(VisitHost.size(), Q2); 
+    Uint32 *frontierCountDeviceQ = malloc_device<Uint32>(1, Queues[1]);
+    Uint32* OffsetDeviceQ        = malloc_device<Uint32>(OffsetHost[1].size(), Queues[1]);
+    Uint32 *EdgesDeviceQ         = malloc_device<Uint32>(IndexHost[1].size(), Queues[1]); 
+    Uint32 *DistanceDeviceQ      = malloc_device<Uint32>(DistanceHost.size(), Queues[1]); 
+    MyUint1 *VisitMaskDeviceQ    = malloc_device<MyUint1>(VisitMaskHost.size(), Queues[1]); 
+    MyUint1 *VisitDeviceQ        = malloc_device<MyUint1>(VisitHost.size(), Queues[1]); 
     
-copyToDevice(Q1,FrontierHostQ1,usm_pipe_global_h);
-copyToDevice(Q1,FrontierHostQ1,usm_pipe_global_l_mirror);
-    copyToDevice(Q1,IndexHost[0],EdgesDevice);
-    copyToDevice(Q1,OffsetHost[0],OffsetDevice);
-    copyToDevice(Q1,distances[i],DistanceDevice);
-    copyToDevice(Q1,VisitMaskHost,VisitMaskDevice);
-    copyToDevice(Q1,VisitHost,VisitDevice);
+    copyToDevice(Queues[0],FrontierHostQ1,usm_pipe_global_h);
+    // copyToDevice(Queues[0],FrontierHostQ1,usm_pipe_global_l_mirror);
+    copyToDevice(Queues[0],IndexHost[0],EdgesDevice);
+    copyToDevice(Queues[0],OffsetHost[0],OffsetDevice);
+    copyToDevice(Queues[0],distances[i],DistanceDevice);
+    copyToDevice(Queues[0],VisitMaskHost,VisitMaskDevice);
+    copyToDevice(Queues[0],VisitHost,VisitDevice);
 
-copyToDevice(Q2,FrontierHostQ2,usm_pipe_global_l);
-copyToDevice(Q2,FrontierHostQ2,usm_pipe_global_h_mirror);
-    copyToDevice(Q2,IndexHost[1],EdgesDeviceQ);
-    copyToDevice(Q2,OffsetHost[1],OffsetDeviceQ);
-    copyToDevice(Q2,distancesQ[i],DistanceDeviceQ);
-    copyToDevice(Q2,VisitMaskHost,VisitMaskDeviceQ);
-    copyToDevice(Q2,VisitHost,VisitDeviceQ);
+    copyToDevice(Queues[1],FrontierHostQ2,usm_pipe_global_l);
+    // copyToDevice(Queues[1],FrontierHostQ2,usm_pipe_global_h_mirror);
+    copyToDevice(Queues[1],IndexHost[1],EdgesDeviceQ);
+    copyToDevice(Queues[1],OffsetHost[1],OffsetDeviceQ);
+    copyToDevice(Queues[1],distancesQ[i],DistanceDeviceQ);
+    copyToDevice(Queues[1],VisitMaskHost,VisitMaskDeviceQ);
+    copyToDevice(Queues[1],VisitHost,VisitDeviceQ);
+
+
+    Queues[1].copy(usm_pipe_global_h, usm_pipe_global_h_mirror, frontierCountHostQ1[0]).wait();
+    Queues[0].copy(usm_pipe_global_l, usm_pipe_global_l_mirror, frontierCountHostQ2[0]).wait();
+
     double start_time = 0;
     double end_time = 0;
     for(int iteration=0; iteration < MAX_NUM_LEVELS; iteration++){
@@ -528,49 +545,53 @@ copyToDevice(Q2,FrontierHostQ2,usm_pipe_global_h_mirror);
         std::cout << "total number of iterations" << iteration << "\n";
         break;
       }    
-      Q1.memcpy(frontierCountDevice, &zero, sizeof(Uint32)).wait();  
-      Q2.memcpy(frontierCountDeviceQ, &zero, sizeof(Uint32)).wait();  
-      exploreEvent = parallel_explorer_kernel<1>(Q1,h_prefix_sum,iteration,OffsetDevice,EdgesDevice,usm_pipe_global_h,usm_pipe_global_l_mirror, VisitMaskDevice,DistanceDevice,VisitDevice);
-      exploreEventQ = parallel_explorer_kernel<1>(Q2,h_prefix_sum,iteration,OffsetDeviceQ,EdgesDeviceQ,usm_pipe_global_h_mirror,usm_pipe_global_l, VisitMaskDeviceQ,DistanceDeviceQ,VisitDeviceQ);
-      Q1.wait();
-      Q2.wait();
+      Queues[0].memcpy(frontierCountDevice, &zero, sizeof(Uint32)).wait();  
+      Queues[1].memcpy(frontierCountDeviceQ, &zero, sizeof(Uint32)).wait();  
+      exploreEvent = parallel_explorer_kernel<0>(Queues[0],h_prefix_sum,iteration,OffsetDevice,EdgesDevice,usm_pipe_global_h,usm_pipe_global_l, VisitMaskDevice,VisitDevice);
+      exploreEventQ = parallel_explorer_kernel<1>(Queues[1],h_prefix_sum,iteration,OffsetDeviceQ,EdgesDeviceQ,usm_pipe_global_h_mirror,usm_pipe_global_l, VisitMaskDeviceQ,VisitDeviceQ);
+      Queues[0].wait();
+      Queues[1].wait();
       
       // // Level Generate
       // // FIXME!
-      levelEvent =parallel_levelgen_kernel(Q1,vertexCount,DistanceDevice,VisitMaskDevice,VisitDevice,iteration,usm_pipe_global_h,frontierCountDevice);
-      levelEventQ =parallel_levelgen_kernel(Q2,vertexCount,DistanceDeviceQ,VisitMaskDeviceQ,VisitDeviceQ,iteration,usm_pipe_global_l,frontierCountDeviceQ);
-      Q1.wait();
-      Q2.wait();
+      levelEvent =parallel_levelgen_kernel<0>(Queues[0],vertexCount,DistanceDevice,VisitMaskDevice,VisitDevice,iteration,usm_pipe_global_h,frontierCountDevice);
+      levelEventQ =parallel_levelgen_kernel<1>(Queues[1],vertexCount,DistanceDeviceQ,VisitMaskDeviceQ,VisitDeviceQ,iteration,usm_pipe_global_l,frontierCountDeviceQ);
+      Queues[0].wait();
+      Queues[1].wait();
 
 
 
-      copyToHost(Q1,frontierCountDevice,frontierCountHostQ1);
-      copyToHost(Q2,frontierCountDeviceQ,frontierCountHostQ2);
+      copyToHost(Queues[0],frontierCountDevice,frontierCountHostQ1);
+      copyToHost(Queues[1],frontierCountDeviceQ,frontierCountHostQ2);
       // std::cout << "frontierCountHostQ1 : " << frontierCountHostQ1[0] << ", frontierCountHostQ2 : " << frontierCountHostQ2[0] << std::endl;
-      // Q1.wait();
-      // Q2.wait();
-      // copyToHost(Q1,usm_pipe_global_h,FrontierHostQ1);
-      // copyToHost(Q2,usm_pipe_global_l,FrontierHostQ2);
-      // Q1.wait();
-      // Q2.wait();
-      Q1.memcpy(usm_pipe_global_l_mirror, usm_pipe_global_l, frontierCountHostQ2[0] * sizeof(Uint32));
-      Q2.memcpy(usm_pipe_global_h_mirror, usm_pipe_global_h, frontierCountHostQ1[0] * sizeof(Uint32));
-      // copyToDevice(Q1,FrontierHost,usm_pipe_1a);
-      // copyToDevice(Q2,FrontierHost,usm_pipe_2b);
-      Q1.wait();
-      Q2.wait();
-
-      h_prefix_sum[0] = 0;
+      Queues[0].wait();
+      Queues[1].wait();
+      // copyToHost(Queues[0],usm_pipe_global_h,FrontierHostQ1);
+      // copyToHost(Queues[1],usm_pipe_global_l,FrontierHostQ2);
+      // Queues[0].wait();
+      // Queues[1].wait();
+      // Queues[0].memcpy(usm_pipe_global_l_mirror, usm_pipe_global_l, frontierCountHostQ2[0] * sizeof(Uint32));
+      // Queues[1].memcpy(usm_pipe_global_h_mirror, usm_pipe_global_h, frontierCountHostQ1[0] * sizeof(Uint32));
+       Queues[1].copy(usm_pipe_global_h, usm_pipe_global_h_mirror, frontierCountHostQ1[0]).wait();
+       Queues[0].copy(usm_pipe_global_l, usm_pipe_global_l_mirror, frontierCountHostQ2[0]).wait();
+      
+      // copyToDevice(Queues[0],FrontierHost,usm_pipe_1a);
+      // copyToDevice(Queues[1],FrontierHost,usm_pipe_2b);
+      // Queues[0].wait();
+      // Queues[1].wait();
+      Queues[0].wait();
+      Queues[1].wait();
+      // h_prefix_sum[0] = 0; 
       h_prefix_sum[1] = frontierCountHostQ1[0];
       h_prefix_sum[2] = frontierCountHostQ1[0] + frontierCountHostQ2[0];
 
   
 
       // Capture execution times 
-      exploreDuration += GetExecutionTime(exploreEvent);
-      levelDuration   += GetExecutionTime(levelEvent);
-      exploreDurationQ += GetExecutionTime(exploreEventQ);
-      levelDurationQ   += GetExecutionTime(levelEventQ);
+      exploreDuration   += GetExecutionTime(exploreEvent);
+      levelDuration     += GetExecutionTime(levelEvent);
+      exploreDurationQ  += GetExecutionTime(exploreEventQ);
+      levelDurationQ    += GetExecutionTime(levelEventQ);
       // pipeDuration    += GetExecutionTime(pipeEvent);
       // resetDuration   += GetExecutionTime(resetEvent);
       // Increase the level by 1 
@@ -580,48 +601,48 @@ copyToDevice(Q2,FrontierHostQ2,usm_pipe_global_h_mirror);
       // end_time = levelEvent.get_profiling_info<info::event_profiling::command_end>();
       double total_time = (end_time - start_time)* 1e-6; // ns to ms
       run_times[i] = total_time;
-      copyToHost(Q1,DistanceDevice,distances[i]);
-      copyToHost(Q2,DistanceDeviceQ,distancesQ[i]);
+      copyToHost(Queues[0],DistanceDevice,distances[i]);
+      copyToHost(Queues[1],DistanceDeviceQ,distancesQ[i]);
 
 
 
 
-    sycl::free(OffsetDevice, Q1);
-    sycl::free(usm_pipe_global_h, Q1);
-    sycl::free(EdgesDevice, Q1);
-    sycl::free(DistanceDevice, Q1);
-    sycl::free(VisitDevice, Q1);
-    sycl::free(VisitMaskDevice, Q1);
+    sycl::free(OffsetDevice, Queues[0]);
+    sycl::free(usm_pipe_global_h, Queues[0]);
+    sycl::free(EdgesDevice, Queues[0]);
+    sycl::free(DistanceDevice, Queues[0]);
+    sycl::free(VisitDevice, Queues[0]);
+    sycl::free(VisitMaskDevice, Queues[0]);
 
-    sycl::free(usm_pipe_global_l, Q2);
-    sycl::free(OffsetDeviceQ, Q2);
-    sycl::free(EdgesDeviceQ, Q2);
-    sycl::free(DistanceDeviceQ, Q2);
-    sycl::free(VisitDeviceQ, Q2);
-    sycl::free(VisitMaskDeviceQ, Q2);
+    sycl::free(usm_pipe_global_l, Queues[1]);
+    sycl::free(OffsetDeviceQ, Queues[1]);
+    sycl::free(EdgesDeviceQ, Queues[1]);
+    sycl::free(DistanceDeviceQ, Queues[1]);
+    sycl::free(VisitDeviceQ, Queues[1]);
+    sycl::free(VisitMaskDeviceQ, Queues[1]);
 
     } // for loop num_runs
     // Add corresponding elements of distances and distancesQ and store in distances
     for (size_t i = 0; i < num_runs; ++i) {
         for (size_t j = 0; j < distances[i].size(); ++j) {
             if(distances[i][j] == -1 && distancesQ[i][j] != -1){
-              // update only if it is not updated with Q1
+              // update only if it is not updated with Queues[0]
               distances[i][j] = distancesQ[i][j];
             }
         }
     }
     // copy VisitDevice back to hostArray
-    // Q1.memcpy(&DistanceHost[0], DistanceDevice, DistanceHost.size() * sizeof(int));
-    // copyToHost(Q1,DistanceDevice,DistanceHost);
+    // Queues[0].memcpy(&DistanceHost[0], DistanceDevice, DistanceHost.size() * sizeof(int));
+    // copyToHost(Queues[0],DistanceDevice,DistanceHost);
 
      DistanceHost = distances[num_runs-1];
-    // sycl::free(OffsetDevice, Q1);
-    // sycl::free(usm_nodes_end, Q1);
-    // sycl::free(EdgesDevice, Q1);
-    // sycl::free(DistanceDevice, Q1);
-    // sycl::free(VisitDevice, Q1);
-    // sycl::free(VisitMaskDevice, Q1);
-    // sycl::free(usm_mask, Q1);
+    // sycl::free(OffsetDevice, Queues[0]);
+    // sycl::free(usm_nodes_end, Queues[0]);
+    // sycl::free(EdgesDevice, Queues[0]);
+    // sycl::free(DistanceDevice, Queues[0]);
+    // sycl::free(VisitDevice, Queues[0]);
+    // sycl::free(VisitMaskDevice, Queues[0]);
+    // sycl::free(usm_mask, Queues[0]);
     // Check if each distances[i] is equal to DistanceHost
     bool all_match_host = true;
     for(int i =0; i < num_runs; i++){
