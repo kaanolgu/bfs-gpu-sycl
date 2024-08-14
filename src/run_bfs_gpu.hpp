@@ -134,8 +134,8 @@ event parallel_explorer_kernel(queue &q,
                                 Uint32 iteration,
                                 Uint32* usm_nodes_start,
                                 Uint32 *usm_edges,
-                                std::vector<Uint32>& frontier_h,
-                                std::vector<Uint32>& frontier_l,
+                                Uint32* usm_pipe_1,
+                                Uint32* usm_pipe_2,
                                 MyUint1 *usm_visit_mask,
                                 Uint32 *usm_dist,
                                 MyUint1 *usm_visit)
@@ -143,106 +143,104 @@ event parallel_explorer_kernel(queue &q,
 
       // Prepare Data 
       const int V = prefix_sum.back();
-      Uint32 *usm_prefix_sum      = malloc_device<Uint32>(prefix_sum.size(), q); 
-      copyToDevice(q,prefix_sum,usm_prefix_sum);
-
-      Uint32 *usm_pipe_1      = malloc_device<Uint32>(frontier_h.size(), q); 
-      Uint32 *usm_pipe_2      = malloc_device<Uint32>(frontier_l.size(), q);
-      copyToDevice(q,frontier_h,usm_pipe_1);
-      copyToDevice(q,frontier_l,usm_pipe_2);
-
-    // Define the work-group size and the number of work-groups
-    const size_t local_size = THREADS_PER_BLOCK;  // Number of work-items per work-group
-    const size_t global_size = ((V + local_size - 1) / local_size) * local_size;
-
-    // Setup the range
-    nd_range<1> range(global_size, local_size);
-
-        auto e = q.submit([&](handler& h) {
-          // Local memory for exclusive sum, shared within the work-group
-          // sycl::local_accessor<int> local_sum(local_size, h);
-          // sycl::local_accessor<int> local_sum2(local_size, h);
-          // sycl::local_accessor<Uint32> local_th_deg(local_size, h);
-          // sycl::local_accessor<Uint32> vertices(local_size, h);
-          sycl::local_accessor<Uint32> sedges(local_size, h);
-          sycl::local_accessor<Uint32> degrees(local_size, h);
-        h.parallel_for<class ExploreNeighbours>(range, [=](nd_item<1> item) {
-          const int gid = item.get_global_id(0);    // global id
-          const int lid  = item.get_local_id(0); // threadIdx.x
-          const int blockIdx  = item.get_group(0); // blockIdx.x
-          const int gridDim   = item.get_group_range(0); // gridDim.x
-          const int blockDim  = item.get_local_range(0); // blockDim.x
+      // we can't pass vectors to the sycl kernel so needs to be integers
+      const int prefix_1 = prefix_sum[1]; 
+      // no need for this since it is same as V
+      // const int prefix_2 = prefix_sum[2]; 
 
 
-          device_ptr<Uint32> DevicePtr_start(usm_nodes_start);  
-          device_ptr<Uint32> DevicePtr_end(usm_nodes_start + 1);  
-          device_ptr<Uint32> DevicePtr_edges(usm_edges);
+      // Define the work-group size and the number of work-groups
+      const size_t local_size = THREADS_PER_BLOCK;  // Number of work-items per work-group
+      const size_t global_size = ((V + local_size - 1) / local_size) * local_size;
 
-          Uint32 v;
-          Uint32 local_th_deg; // this variable is shared between workitems
-        // this variable will be instantiated for each work-item separately
+      // Setup the range
+      nd_range<1> range(global_size, local_size);
 
-        // Determine which pipe to read from based on gid
-        //  if (gid < V) {
-        //         v = usm_pipe_1[gid];
-        //         sedges[lid] = DevicePtr_start[v];
-        //         local_th_deg =DevicePtr_end[v] - DevicePtr_start[v];
-        //     }
-        //     else {
-        //         local_th_deg = 0;
-        //     }
-
-        if (gid < usm_prefix_sum[1]) {
-            // Read from usm_pipe
-            v = usm_pipe_1[gid];
-            sedges[lid] = DevicePtr_start[v]; // Store in sedges at the correct global index
-            local_th_deg = DevicePtr_end[v] - DevicePtr_start[v]; // Assuming this is how you're calculating degree
-        } else if (gid < usm_prefix_sum[2]) {
-            // Read from usm_pipe_2  
-            v = usm_pipe_2[gid -  usm_prefix_sum[1]]; // Adjust index for usm_pipe_2
-            sedges[lid] = DevicePtr_start[v]; // Store in sedges at the correct global index
-            local_th_deg = DevicePtr_end[v] - DevicePtr_start[v]; // Assuming this is how you're calculating degree
-        } else {
-            local_th_deg = 0;
-        }
-          // sycl::group_barrier(item.get_group());
-
-          // 2. Exclusive sum of degrees to find total work items per block.
-          Uint32 th_deg = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg, sycl::plus<>());
-          degrees[lid] = th_deg;
-          // sycl::group_barrier(item.get_group());
-
-          // 3. Cumulative sum of total number of nonzeros 
-          Uint32 total_nnz = reduce_over_group(item.get_group(), local_th_deg, sycl::plus<>());
-          Uint32 length = (V < gid - lid + blockDim) ? (V - (gid -lid)) : blockDim;
-     
-
-  for (int i = lid;            // threadIdx.x
-       i < total_nnz;  // total degree to process
-       i += blockDim    // increment by blockDim.x
-  ) {
-
-  /// 4. Compute. Using binary search, find the source vertex each thread is
-  /// processing, and the corresponding edge, neighbor and weight tuple. Passed
-  /// to the user-defined lambda operator to process. If there's an output, the
-  /// resultant neighbor or invalid vertex is written to the output frontier.
-    // Implement a simple upper_bound algorithm for use in SYCL
-  
-    Uint32 it = upper_bound(degrees,length, i);
-    Uint32 id =  it - 1;
-    Uint32  e = sedges[id] + i  - degrees[id]; 
-    Uint32  n  = usm_edges[e];   
-
-    if(!usm_visit[n]){
-      usm_visit_mask[n] = 1;
-    }
-  } 
-        
-    });
-        });
+          auto e = q.submit([&](handler& h) {
+            // Local memory for exclusive sum, shared within the work-group
+            // sycl::local_accessor<int> local_sum(local_size, h);
+            // sycl::local_accessor<int> local_sum2(local_size, h);
+            // sycl::local_accessor<Uint32> local_th_deg(local_size, h);
+            // sycl::local_accessor<Uint32> vertices(local_size, h);
+            sycl::local_accessor<Uint32> sedges(local_size, h);
+            sycl::local_accessor<Uint32> degrees(local_size, h);
+          h.parallel_for<class ExploreNeighbours>(range, [=](nd_item<1> item) {
+            const int gid = item.get_global_id(0);    // global id
+            const int lid  = item.get_local_id(0); // threadIdx.x
+            const int blockIdx  = item.get_group(0); // blockIdx.x
+            const int gridDim   = item.get_group_range(0); // gridDim.x
+            const int blockDim  = item.get_local_range(0); // blockDim.x
 
 
-return e;
+            device_ptr<Uint32> DevicePtr_start(usm_nodes_start);  
+            device_ptr<Uint32> DevicePtr_end(usm_nodes_start + 1);  
+            device_ptr<Uint32> DevicePtr_edges(usm_edges);
+
+            Uint32 v;
+            Uint32 local_th_deg; // this variable is shared between workitems
+          // this variable will be instantiated for each work-item separately
+
+          // Determine which pipe to read from based on gid
+          //  if (gid < V) {
+          //         v = usm_pipe_1[gid];
+          //         sedges[lid] = DevicePtr_start[v];
+          //         local_th_deg =DevicePtr_end[v] - DevicePtr_start[v];
+          //     }
+          //     else {
+          //         local_th_deg = 0;
+          //     }
+
+          if (gid < prefix_1) {
+              // Read from usm_pipe
+              v = usm_pipe_1[gid];
+              sedges[lid] = DevicePtr_start[v]; // Store in sedges at the correct global index
+              local_th_deg = DevicePtr_end[v] - DevicePtr_start[v]; // Assuming this is how you're calculating degree
+          } else if (gid < V) {
+              // Read from usm_pipe_2  
+              v = usm_pipe_2[gid -  prefix_1]; // Adjust index for usm_pipe_2
+              sedges[lid] = DevicePtr_start[v]; // Store in sedges at the correct global index
+              local_th_deg = DevicePtr_end[v] - DevicePtr_start[v]; // Assuming this is how you're calculating degree
+          } else {
+              local_th_deg = 0;
+          }
+            // sycl::group_barrier(item.get_group());
+
+            // 2. Exclusive sum of degrees to find total work items per block.
+            Uint32 th_deg = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg, sycl::plus<>());
+            degrees[lid] = th_deg;
+            // sycl::group_barrier(item.get_group());
+
+            // 3. Cumulative sum of total number of nonzeros 
+            Uint32 total_nnz = reduce_over_group(item.get_group(), local_th_deg, sycl::plus<>());
+            Uint32 length = (V < gid - lid + blockDim) ? (V - (gid -lid)) : blockDim;
+      
+
+    for (int i = lid;            // threadIdx.x
+        i < total_nnz;  // total degree to process
+        i += blockDim    // increment by blockDim.x
+    ) {
+
+    /// 4. Compute. Using binary search, find the source vertex each thread is
+    /// processing, and the corresponding edge, neighbor and weight tuple. Passed
+    /// to the user-defined lambda operator to process. If there's an output, the
+    /// resultant neighbor or invalid vertex is written to the output frontier.
+      // Implement a simple upper_bound algorithm for use in SYCL
+    
+      Uint32 it = upper_bound(degrees,length, i);
+      Uint32 id =  it - 1;
+      Uint32  e = sedges[id] + i  - degrees[id]; 
+      Uint32  n  = usm_edges[e];   
+
+      if(!usm_visit[n]){
+        usm_visit_mask[n] = 1;
+      }
+    } 
+          
+      });
+          });
+
+
+  return e; 
 }
 
 
@@ -482,6 +480,8 @@ void GPURun(int vertexCount,
       FrontierHostQ2[0] = sourceNode;
       // Frontier End
        Uint32 *usm_pipe_global_h = malloc_device<Uint32>(vertexCount, Q1);
+       Uint32 *usm_pipe_global_h_mirror = malloc_device<Uint32>(vertexCount, Q2);
+       Uint32 *usm_pipe_global_l_mirror = malloc_device<Uint32>(vertexCount, Q1);
        Uint32 *usm_pipe_global_l = malloc_device<Uint32>(vertexCount, Q2);
 
     // // Create a vector to store the USM pointers
@@ -506,14 +506,16 @@ void GPURun(int vertexCount,
     MyUint1 *VisitMaskDeviceQ    = malloc_device<MyUint1>(VisitMaskHost.size(), Q2); 
     MyUint1 *VisitDeviceQ      = malloc_device<MyUint1>(VisitHost.size(), Q2); 
     
-
+copyToDevice(Q1,FrontierHostQ1,usm_pipe_global_h);
+copyToDevice(Q1,FrontierHostQ1,usm_pipe_global_l_mirror);
     copyToDevice(Q1,IndexHost[0],EdgesDevice);
     copyToDevice(Q1,OffsetHost[0],OffsetDevice);
     copyToDevice(Q1,distances[i],DistanceDevice);
     copyToDevice(Q1,VisitMaskHost,VisitMaskDevice);
     copyToDevice(Q1,VisitHost,VisitDevice);
 
-
+copyToDevice(Q2,FrontierHostQ2,usm_pipe_global_l);
+copyToDevice(Q2,FrontierHostQ2,usm_pipe_global_h_mirror);
     copyToDevice(Q2,IndexHost[1],EdgesDeviceQ);
     copyToDevice(Q2,OffsetHost[1],OffsetDeviceQ);
     copyToDevice(Q2,distancesQ[i],DistanceDeviceQ);
@@ -528,8 +530,8 @@ void GPURun(int vertexCount,
       }    
       Q1.memcpy(frontierCountDevice, &zero, sizeof(Uint32)).wait();  
       Q2.memcpy(frontierCountDeviceQ, &zero, sizeof(Uint32)).wait();  
-      exploreEvent = parallel_explorer_kernel<1>(Q1,h_prefix_sum,iteration,OffsetDevice,EdgesDevice,FrontierHostQ1,FrontierHostQ2, VisitMaskDevice,DistanceDevice,VisitDevice);
-      exploreEventQ = parallel_explorer_kernel<1>(Q2,h_prefix_sum,iteration,OffsetDeviceQ,EdgesDeviceQ,FrontierHostQ1,FrontierHostQ2, VisitMaskDeviceQ,DistanceDeviceQ,VisitDeviceQ);
+      exploreEvent = parallel_explorer_kernel<1>(Q1,h_prefix_sum,iteration,OffsetDevice,EdgesDevice,usm_pipe_global_h,usm_pipe_global_l_mirror, VisitMaskDevice,DistanceDevice,VisitDevice);
+      exploreEventQ = parallel_explorer_kernel<1>(Q2,h_prefix_sum,iteration,OffsetDeviceQ,EdgesDeviceQ,usm_pipe_global_h_mirror,usm_pipe_global_l, VisitMaskDeviceQ,DistanceDeviceQ,VisitDeviceQ);
       Q1.wait();
       Q2.wait();
       
@@ -547,15 +549,16 @@ void GPURun(int vertexCount,
       // std::cout << "frontierCountHostQ1 : " << frontierCountHostQ1[0] << ", frontierCountHostQ2 : " << frontierCountHostQ2[0] << std::endl;
       // Q1.wait();
       // Q2.wait();
-      copyToHost(Q1,usm_pipe_global_h,FrontierHostQ1);
-      copyToHost(Q2,usm_pipe_global_l,FrontierHostQ2);
+      // copyToHost(Q1,usm_pipe_global_h,FrontierHostQ1);
+      // copyToHost(Q2,usm_pipe_global_l,FrontierHostQ2);
       // Q1.wait();
       // Q2.wait();
-
+      Q1.memcpy(usm_pipe_global_l_mirror, usm_pipe_global_l, frontierCountHostQ2[0] * sizeof(Uint32));
+      Q2.memcpy(usm_pipe_global_h_mirror, usm_pipe_global_h, frontierCountHostQ1[0] * sizeof(Uint32));
       // copyToDevice(Q1,FrontierHost,usm_pipe_1a);
       // copyToDevice(Q2,FrontierHost,usm_pipe_2b);
-      // Q1.wait();
-      // Q2.wait();
+      Q1.wait();
+      Q2.wait();
 
       h_prefix_sum[0] = 0;
       h_prefix_sum[1] = frontierCountHostQ1[0];
