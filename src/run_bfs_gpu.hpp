@@ -596,10 +596,10 @@ void GPURun(int vertexCount,
       // pipeDuration    += GetExecutionTime(pipeEvent);
       // resetDuration   += GetExecutionTime(resetEvent);
       // Increase the level by 1 
-      // if(iteration == 0)
-      // start_time = exploreEvent.get_profiling_info<info::event_profiling::command_start>();
+      if(iteration == 0)
+      start_time = exploreEvent.get_profiling_info<info::event_profiling::command_start>();
     }
-      // end_time = levelEvent.get_profiling_info<info::event_profiling::command_end>();
+      end_time = levelEvent.get_profiling_info<info::event_profiling::command_end>();
       double total_time = (end_time - start_time)* 1e-6; // ns to ms
       run_times[i] = total_time;
       copyToHost(Queues[0],DistanceDevice,distances[i]);
