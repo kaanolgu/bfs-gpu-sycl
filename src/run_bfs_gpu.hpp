@@ -230,7 +230,8 @@ event parallel_explorer_kernel(queue &q,
 
       if(!usm_visit[n]){
         usm_visit_mask[n] = 1;
-        usm_visit[n] = 1;
+        // usm_visit[n] = 1;
+        // usm_dist[n] = iteration + 1;  
       }
     } 
           
@@ -245,12 +246,12 @@ event parallel_explorer_kernel(queue &q,
 template <int krnl_id>
 event parallel_levelgen_kernel(queue &q,
                                 int V,
-                                Uint32 *usm_dist,
                                 MyUint1 *usm_visit_mask,
                                 MyUint1 *usm_visit,
                                 int iteration,
                                 Uint32 *usm_pipe,
-                                Uint32 *usm_pipe_size
+                                Uint32 *usm_pipe_size,
+                                Uint32* usm_dist
                                  ){
    // Define the work-group size and the number of work-groups
     const size_t local_size = THREADS_PER_BLOCK;  // Number of work-items per work-group
@@ -281,7 +282,7 @@ event parallel_levelgen_kernel(queue &q,
             if(vmask == 1){
 
               usm_dist[gid] = iteration + 1;  
-                // usm_visit[gid] = 1;
+                usm_visit[gid] = 1;
                                 sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,
             sycl::memory_scope::device, 
             sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
@@ -482,6 +483,7 @@ void GPURun(int vertexCount,
       //  Uint32 *usm_pipe_global_h = malloc_device<Uint32>(vertexCount, Queues[0]);
 
       Uint32 *usm_pipe_global_h = malloc<Uint32>(vertexCount, Queues[0], usm::alloc::device);
+      Uint32 *usm_pipe_global = malloc<Uint32>(vertexCount, Queues[0], usm::alloc::device);
       Uint32 *usm_pipe_global_l = malloc<Uint32>(vertexCount, Queues[1], usm::alloc::device);
 
       Uint32 *usm_pipe_global_h_mirror = malloc<Uint32>(vertexCount, Queues[1], usm::alloc::device);
@@ -514,6 +516,7 @@ void GPURun(int vertexCount,
     MyUint1 *VisitDeviceQ        = malloc_device<MyUint1>(VisitHost.size(), Queues[1]); 
     
     copyToDevice(Queues[0],FrontierHostQ1,usm_pipe_global_h);
+    copyToDevice(Queues[0],FrontierHostQ1,usm_pipe_global);
     // copyToDevice(Queues[0],FrontierHostQ1,usm_pipe_global_l_mirror);
     copyToDevice(Queues[0],IndexHost[0],EdgesDevice);
     copyToDevice(Queues[0],OffsetHost[0],OffsetDevice);
@@ -536,7 +539,7 @@ void GPURun(int vertexCount,
     double start_time = 0;
     double end_time = 0;
     for(int iteration=0; iteration < MAX_NUM_LEVELS; iteration++){
-      if((frontierCountHostQ2[0] + frontierCountHostQ1[0]) == 0){
+      if((frontierCountHostQ1[0]) == 0){
         std::cout << "total number of iterations" << iteration << "\n";
         break;
       }    
@@ -544,27 +547,26 @@ void GPURun(int vertexCount,
       Queues[1].memcpy(frontierCountDeviceQ, &zero, sizeof(Uint32));  
       Queues[0].wait();
       Queues[1].wait();
-      exploreEvent = parallel_explorer_kernel<0>(Queues[0],frontierCountHostQ1[0],iteration,OffsetDevice,EdgesDevice,usm_pipe_global_h, VisitMaskDevice,VisitDevice);
-      exploreEventQ = parallel_explorer_kernel<1>(Queues[0],frontierCountHostQ2[0],iteration,OffsetDevice,EdgesDevice,usm_pipe_global_l, VisitMaskDevice,VisitDevice);
-      // Queues[0].wait();
-      // Queues[1].wait();
-      parallel_explorer_kernel<2>(Queues[1],frontierCountHostQ2[0],iteration,OffsetDeviceQ,EdgesDeviceQ,usm_pipe_global_l, VisitMaskDeviceQ,VisitDeviceQ);
-      parallel_explorer_kernel<3>(Queues[1],frontierCountHostQ1[0],iteration,OffsetDeviceQ,EdgesDeviceQ,usm_pipe_global_h, VisitMaskDeviceQ,VisitDeviceQ);
+      exploreEvent = parallel_explorer_kernel<0>(Queues[0],frontierCountHostQ1[0],iteration,OffsetDevice,EdgesDevice,usm_pipe_global, VisitMaskDevice,VisitDevice);
+      parallel_explorer_kernel<3>(Queues[1],frontierCountHostQ1[0],iteration,OffsetDeviceQ,EdgesDeviceQ,usm_pipe_global, VisitMaskDeviceQ,VisitDeviceQ);
+      // exploreEventQ = parallel_explorer_kernel<1>(Queues[0],frontierCountHostQ1[0]/2,frontierCountHostQ1[0],iteration,OffsetDevice,EdgesDevice,usm_pipe_global, VisitMaskDevice,VisitDevice,DistanceDevice);
+      // parallel_explorer_kernel<2>(Queues[1],frontierCountHostQ1[0]/2,frontierCountHostQ1[0],iteration,OffsetDeviceQ,EdgesDeviceQ,usm_pipe_global, VisitMaskDeviceQ,VisitDeviceQ,DistanceDevice);
       Queues[0].wait();
       Queues[1].wait(); 
       // // Level Generate
       // // FIXME!
-      levelEvent =parallel_levelgen_kernel<0>(Queues[0],vertexCount,DistanceDevice,VisitMaskDevice,VisitDevice,iteration,usm_pipe_global_h,frontierCountDevice);
-      levelEventQ =parallel_levelgen_kernel<1>(Queues[1],vertexCount,DistanceDeviceQ,VisitMaskDeviceQ,VisitDeviceQ,iteration,usm_pipe_global_l,frontierCountDeviceQ);
+      levelEvent =parallel_levelgen_kernel<0>(Queues[0],vertexCount,VisitMaskDevice,VisitDevice,iteration,usm_pipe_global,frontierCountDevice,DistanceDevice);
+      levelEventQ =parallel_levelgen_kernel<1>(Queues[1],vertexCount,VisitMaskDeviceQ,VisitDeviceQ,iteration,usm_pipe_global,frontierCountDevice,DistanceDeviceQ);
       Queues[0].wait();
       Queues[1].wait();
 
 
 
       copyToHost(Queues[0],frontierCountDevice,frontierCountHostQ1);
-      copyToHost(Queues[1],frontierCountDeviceQ,frontierCountHostQ2);
+      // copyToHost(Queues[1],frontierCountDevice,frontierCountHostQ2);
+
       Queues[0].wait();
-      Queues[1].wait();
+      // Queues[1].wait();
             // std::cout << "frontierCountHostQ1 : " << frontierCountHostQ1[0] << ", frontierCountHostQ2 : " << frontierCountHostQ2[0] << std::endl;
 
       // copyToHost(Queues[0],usm_pipe_global_h,FrontierHostQ1);
@@ -581,8 +583,8 @@ void GPURun(int vertexCount,
       // Queues[0].wait();
       // Queues[1].wait();
       // Queues[0].wait();
-      // Queues[1].wait();
-      // h_prefix_sum[0] = 0; 
+      // // Queues[1].wait();
+      // h_prefix_sum[0] = frontierCountHostQ1[0]/2; 
       // h_prefix_sum[1] = frontierCountHostQ1[0];
       // h_prefix_sum[2] = frontierCountHostQ1[0] + frontierCountHostQ2[0];
 
@@ -591,7 +593,7 @@ void GPURun(int vertexCount,
       // Capture execution times 
       exploreDuration   += GetExecutionTime(exploreEvent);
       levelDuration     += GetExecutionTime(levelEvent);
-      exploreDurationQ  += GetExecutionTime(exploreEventQ);
+      // exploreDurationQ  += GetExecutionTime(exploreEventQ);
       levelDurationQ    += GetExecutionTime(levelEventQ);
       // pipeDuration    += GetExecutionTime(pipeEvent);
       // resetDuration   += GetExecutionTime(resetEvent);
