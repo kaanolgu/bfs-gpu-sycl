@@ -134,20 +134,19 @@ template <int krnl_id> class LevelGen;
 
 template <int krnl_id>
 event parallel_explorer_kernel(queue &q,
-                                std::vector<Uint32>& prefix_sum,
+                                const Uint32 V,
                                 Uint32 iteration,
                                 Uint32* usm_nodes_start,
                                 Uint32 *usm_edges,
                                 Uint32* usm_pipe_1,
-                                Uint32* usm_pipe_2,
                                 MyUint1 *usm_visit_mask,
                                 MyUint1 *usm_visit)
     {
 
       // Prepare Data 
-      const int V = prefix_sum.back();
+      // const int V = prefix_sum.back();
       // we can't pass vectors to the sycl kernel so needs to be integers
-      const int prefix_1 = prefix_sum[1]; 
+      // const int prefix_1 = prefix_sum[1]; 
       // no need for this since it is same as V
       // const int prefix_2 = prefix_sum[2]; 
 
@@ -193,17 +192,12 @@ event parallel_explorer_kernel(queue &q,
           //         local_th_deg = 0;
           //     }
 
-          if (gid < prefix_1) {
+          if (gid < V) {
               // Read from usm_pipe
               v = usm_pipe_1[gid];
               sedges[lid] = DevicePtr_start[v]; // Store in sedges at the correct global index
               local_th_deg = DevicePtr_end[v] - DevicePtr_start[v]; // Assuming this is how you're calculating degree
-          } else if (gid < V) {
-              // Read from usm_pipe_2  
-              v = usm_pipe_2[gid -  prefix_1]; // Adjust index for usm_pipe_2
-              sedges[lid] = DevicePtr_start[v]; // Store in sedges at the correct global index
-              local_th_deg = DevicePtr_end[v] - DevicePtr_start[v]; // Assuming this is how you're calculating degree
-          } else {
+          }  else {
               local_th_deg = 0;
           }
             // sycl::group_barrier(item.get_group());
@@ -453,6 +447,7 @@ void GPURun(int vertexCount,
 
   // Enables Devs[0] to access Devs[1] memory.
     Devs[0].ext_oneapi_enable_peer_access(Devs[1]);
+    Devs[1].ext_oneapi_enable_peer_access(Devs[0]);
 
 
 
@@ -541,17 +536,22 @@ void GPURun(int vertexCount,
     double start_time = 0;
     double end_time = 0;
     for(int iteration=0; iteration < MAX_NUM_LEVELS; iteration++){
-      if(h_prefix_sum[2] == 0){
+      if((frontierCountHostQ2[0] + frontierCountHostQ1[0]) == 0){
         std::cout << "total number of iterations" << iteration << "\n";
         break;
       }    
-      Queues[0].memcpy(frontierCountDevice, &zero, sizeof(Uint32)).wait();  
-      Queues[1].memcpy(frontierCountDeviceQ, &zero, sizeof(Uint32)).wait();  
-      exploreEvent = parallel_explorer_kernel<0>(Queues[0],h_prefix_sum,iteration,OffsetDevice,EdgesDevice,usm_pipe_global_h,usm_pipe_global_l, VisitMaskDevice,VisitDevice);
-      exploreEventQ = parallel_explorer_kernel<1>(Queues[1],h_prefix_sum,iteration,OffsetDeviceQ,EdgesDeviceQ,usm_pipe_global_h_mirror,usm_pipe_global_l, VisitMaskDeviceQ,VisitDeviceQ);
+      Queues[0].memcpy(frontierCountDevice, &zero, sizeof(Uint32));  
+      Queues[1].memcpy(frontierCountDeviceQ, &zero, sizeof(Uint32));  
       Queues[0].wait();
       Queues[1].wait();
-      
+      exploreEvent = parallel_explorer_kernel<0>(Queues[0],frontierCountHostQ1[0],iteration,OffsetDevice,EdgesDevice,usm_pipe_global_h, VisitMaskDevice,VisitDevice);
+      exploreEventQ = parallel_explorer_kernel<1>(Queues[0],frontierCountHostQ2[0],iteration,OffsetDevice,EdgesDevice,usm_pipe_global_l, VisitMaskDevice,VisitDevice);
+      // Queues[0].wait();
+      // Queues[1].wait();
+      parallel_explorer_kernel<2>(Queues[1],frontierCountHostQ2[0],iteration,OffsetDeviceQ,EdgesDeviceQ,usm_pipe_global_l, VisitMaskDeviceQ,VisitDeviceQ);
+      parallel_explorer_kernel<3>(Queues[1],frontierCountHostQ1[0],iteration,OffsetDeviceQ,EdgesDeviceQ,usm_pipe_global_h, VisitMaskDeviceQ,VisitDeviceQ);
+      Queues[0].wait();
+      Queues[1].wait(); 
       // // Level Generate
       // // FIXME!
       levelEvent =parallel_levelgen_kernel<0>(Queues[0],vertexCount,DistanceDevice,VisitMaskDevice,VisitDevice,iteration,usm_pipe_global_h,frontierCountDevice);
@@ -563,27 +563,28 @@ void GPURun(int vertexCount,
 
       copyToHost(Queues[0],frontierCountDevice,frontierCountHostQ1);
       copyToHost(Queues[1],frontierCountDeviceQ,frontierCountHostQ2);
-      // std::cout << "frontierCountHostQ1 : " << frontierCountHostQ1[0] << ", frontierCountHostQ2 : " << frontierCountHostQ2[0] << std::endl;
       Queues[0].wait();
       Queues[1].wait();
+            // std::cout << "frontierCountHostQ1 : " << frontierCountHostQ1[0] << ", frontierCountHostQ2 : " << frontierCountHostQ2[0] << std::endl;
+
       // copyToHost(Queues[0],usm_pipe_global_h,FrontierHostQ1);
       // copyToHost(Queues[1],usm_pipe_global_l,FrontierHostQ2);
       // Queues[0].wait();
       // Queues[1].wait();
       // Queues[0].memcpy(usm_pipe_global_l_mirror, usm_pipe_global_l, frontierCountHostQ2[0] * sizeof(Uint32));
       // Queues[1].memcpy(usm_pipe_global_h_mirror, usm_pipe_global_h, frontierCountHostQ1[0] * sizeof(Uint32));
-       Queues[1].copy(usm_pipe_global_h, usm_pipe_global_h_mirror, frontierCountHostQ1[0]).wait();
-       Queues[0].copy(usm_pipe_global_l, usm_pipe_global_l_mirror, frontierCountHostQ2[0]).wait();
+      //  Queues[1].copy(usm_pipe_global_h, usm_pipe_global_h_mirror, frontierCountHostQ1[0]).wait();
+      //  Queues[0].copy(usm_pipe_global_l, usm_pipe_global_l_mirror, frontierCountHostQ2[0]).wait();
       
       // copyToDevice(Queues[0],FrontierHost,usm_pipe_1a);
       // copyToDevice(Queues[1],FrontierHost,usm_pipe_2b);
       // Queues[0].wait();
       // Queues[1].wait();
-      Queues[0].wait();
-      Queues[1].wait();
+      // Queues[0].wait();
+      // Queues[1].wait();
       // h_prefix_sum[0] = 0; 
-      h_prefix_sum[1] = frontierCountHostQ1[0];
-      h_prefix_sum[2] = frontierCountHostQ1[0] + frontierCountHostQ2[0];
+      // h_prefix_sum[1] = frontierCountHostQ1[0];
+      // h_prefix_sum[2] = frontierCountHostQ1[0] + frontierCountHostQ2[0];
 
   
 
