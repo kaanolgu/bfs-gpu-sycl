@@ -457,6 +457,7 @@ void GPURun(int vertexCount,
     sycl::event levelEvent,exploreEvent;
     sycl::event levelEventQ,exploreEventQ;
     sycl::event pipeEvent,resetEvent;
+    sycl::event copybackhostEvent;
     double exploreDuration=0,levelDuration=0;
     double exploreDurationQ=0,levelDurationQ=0;
     double pipeDuration=0,resetDuration=0;
@@ -535,7 +536,7 @@ void GPURun(int vertexCount,
 
     Queues[1].copy(usm_pipe_global_h, usm_pipe_global_h_mirror, frontierCountHostQ1[0]).wait();
     Queues[0].copy(usm_pipe_global_l, usm_pipe_global_l_mirror, frontierCountHostQ2[0]).wait();
-
+    Queues[0].memcpy(frontierCountDevice, &zero, sizeof(Uint32));  
     double start_time = 0;
     double end_time = 0;
     for(int iteration=0; iteration < MAX_NUM_LEVELS; iteration++){
@@ -543,53 +544,28 @@ void GPURun(int vertexCount,
         std::cout << "total number of iterations" << iteration << "\n";
         break;
       }    
-      Queues[0].memcpy(frontierCountDevice, &zero, sizeof(Uint32));  
-      Queues[1].memcpy(frontierCountDeviceQ, &zero, sizeof(Uint32));  
-      Queues[0].wait();
-      Queues[1].wait();
+       
+
+
       exploreEvent = parallel_explorer_kernel<0>(Queues[0],frontierCountHostQ1[0],iteration,OffsetDevice,EdgesDevice,usm_pipe_global, VisitMaskDevice,VisitDevice);
       parallel_explorer_kernel<3>(Queues[1],frontierCountHostQ1[0],iteration,OffsetDeviceQ,EdgesDeviceQ,usm_pipe_global, VisitMaskDeviceQ,VisitDeviceQ);
-      // exploreEventQ = parallel_explorer_kernel<1>(Queues[0],frontierCountHostQ1[0]/2,frontierCountHostQ1[0],iteration,OffsetDevice,EdgesDevice,usm_pipe_global, VisitMaskDevice,VisitDevice,DistanceDevice);
-      // parallel_explorer_kernel<2>(Queues[1],frontierCountHostQ1[0]/2,frontierCountHostQ1[0],iteration,OffsetDeviceQ,EdgesDeviceQ,usm_pipe_global, VisitMaskDeviceQ,VisitDeviceQ,DistanceDevice);
+
       Queues[0].wait();
       Queues[1].wait(); 
-      // // Level Generate
-      // // FIXME!
+
       levelEvent =parallel_levelgen_kernel<0>(Queues[0],vertexCount,VisitMaskDevice,VisitDevice,iteration,usm_pipe_global,frontierCountDevice,DistanceDevice);
-      levelEventQ =parallel_levelgen_kernel<1>(Queues[1],vertexCount,VisitMaskDeviceQ,VisitDeviceQ,iteration,usm_pipe_global,frontierCountDevice,DistanceDeviceQ);
+      levelEventQ =parallel_levelgen_kernel<1>(Queues[1],vertexCount,VisitMaskDeviceQ,VisitDeviceQ,iteration,usm_pipe_global,frontierCountDevice,DistanceDevice);
+     
       Queues[0].wait();
       Queues[1].wait();
 
 
 
       copyToHost(Queues[0],frontierCountDevice,frontierCountHostQ1);
-      // copyToHost(Queues[1],frontierCountDevice,frontierCountHostQ2);
-
-      Queues[0].wait();
-      // Queues[1].wait();
-            // std::cout << "frontierCountHostQ1 : " << frontierCountHostQ1[0] << ", frontierCountHostQ2 : " << frontierCountHostQ2[0] << std::endl;
-
-      // copyToHost(Queues[0],usm_pipe_global_h,FrontierHostQ1);
-      // copyToHost(Queues[1],usm_pipe_global_l,FrontierHostQ2);
-      // Queues[0].wait();
-      // Queues[1].wait();
-      // Queues[0].memcpy(usm_pipe_global_l_mirror, usm_pipe_global_l, frontierCountHostQ2[0] * sizeof(Uint32));
-      // Queues[1].memcpy(usm_pipe_global_h_mirror, usm_pipe_global_h, frontierCountHostQ1[0] * sizeof(Uint32));
-      //  Queues[1].copy(usm_pipe_global_h, usm_pipe_global_h_mirror, frontierCountHostQ1[0]).wait();
-      //  Queues[0].copy(usm_pipe_global_l, usm_pipe_global_l_mirror, frontierCountHostQ2[0]).wait();
       
-      // copyToDevice(Queues[0],FrontierHost,usm_pipe_1a);
-      // copyToDevice(Queues[1],FrontierHost,usm_pipe_2b);
-      // Queues[0].wait();
-      // Queues[1].wait();
-      // Queues[0].wait();
-      // // Queues[1].wait();
-      // h_prefix_sum[0] = frontierCountHostQ1[0]/2; 
-      // h_prefix_sum[1] = frontierCountHostQ1[0];
-      // h_prefix_sum[2] = frontierCountHostQ1[0] + frontierCountHostQ2[0];
-
-  
-
+      Queues[0].wait();
+      copybackhostEvent = Queues[0].memcpy(frontierCountDevice, &zero, sizeof(Uint32));
+       
       // Capture execution times 
       exploreDuration   += GetExecutionTime(exploreEvent);
       levelDuration     += GetExecutionTime(levelEvent);
@@ -601,12 +577,11 @@ void GPURun(int vertexCount,
       if(iteration == 0)
       start_time = exploreEvent.get_profiling_info<info::event_profiling::command_start>();
     }
-      end_time = levelEvent.get_profiling_info<info::event_profiling::command_end>();
+        end_time = copybackhostEvent.get_profiling_info<info::event_profiling::command_end>();
+      // end_time = max(levelEvent.get_profiling_info<info::event_profiling::command_end>(),levelEventQ.get_profiling_info<info::event_profiling::command_end>());
       double total_time = (end_time - start_time)* 1e-6; // ns to ms
       run_times[i] = total_time;
       copyToHost(Queues[0],DistanceDevice,distances[i]);
-      copyToHost(Queues[1],DistanceDeviceQ,distancesQ[i]);
-
 
 
 
@@ -625,15 +600,15 @@ void GPURun(int vertexCount,
     sycl::free(VisitMaskDeviceQ, Queues[1]);
 
     } // for loop num_runs
-    // Add corresponding elements of distances and distancesQ and store in distances
-    for (size_t i = 0; i < num_runs; ++i) {
-        for (size_t j = 0; j < distances[i].size(); ++j) {
-            if(distances[i][j] == -1 && distancesQ[i][j] != -1){
-              // update only if it is not updated with Queues[0]
-              distances[i][j] = distancesQ[i][j];
-            }
-        }
-    }
+    // // Add corresponding elements of distances and distancesQ and store in distances
+    // for (size_t i = 0; i < num_runs; ++i) {
+    //     for (size_t j = 0; j < distances[i].size(); ++j) {
+    //         if(distances[i][j] == -1 && distancesQ[i][j] != -1){
+    //           // update only if it is not updated with Queues[0]
+    //           distances[i][j] = distancesQ[i][j];
+    //         }
+    //     }
+    // }
     // copy VisitDevice back to hostArray
     // Queues[0].memcpy(&DistanceHost[0], DistanceDevice, DistanceHost.size() * sizeof(int));
     // copyToHost(Queues[0],DistanceDevice,DistanceHost);
