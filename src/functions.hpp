@@ -109,3 +109,36 @@ public:
 private:
     std::map<std::string, std::string> arguments;
 };
+
+
+// Function to calculate the mean of the data
+double calculateMean(const std::vector<double>& data) {
+    double sum = 0.0;
+    for(double num : data) {
+        sum += num;
+    }
+    return sum / data.size();
+}
+
+// Function to calculate the standard deviation of the data
+double calculateStandardDeviation(const std::vector<double>& data, double mean) {
+    double sum = 0.0;
+    for(double num : data) {
+        sum += (num - mean) * (num - mean);
+    }
+    return std::sqrt(sum / data.size());
+}
+
+// Function to remove anomalies from the data
+std::vector<double> removeAnomalies(const std::vector<double>& data, double threshold) {
+    std::vector<double> filteredData;
+    double mean = calculateMean(data);
+    double stdDev = calculateStandardDeviation(data, mean);
+
+    for(double num : data) {
+        if(std::abs(num - mean) <= threshold * stdDev) {
+            filteredData.push_back(num);
+        }
+    }
+    return filteredData;
+}

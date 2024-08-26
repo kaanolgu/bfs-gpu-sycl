@@ -647,7 +647,18 @@ fpga_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID_i) {
     const char separator    = ' ';
     const int nameWidth     = 24;
     const int numWidth      = 24;
-
+// Define the threshold for anomaly detection
+    double threshold = 2.0; // This means we consider points beyond 2 standard deviations as anomalies
+    // explanation for threshold : https://chatgpt.com/share/6e64d349-bdd6-4662-99c2-2d265dffd43c
+    // Remove anomalies
+    std::vector<double> filteredData = removeAnomalies(run_times, threshold);
+   std::cout << std::accumulate(filteredData.begin(), filteredData.end(), 0.0) / filteredData.size();
+    // Output the filtered data
+    std::cout << "Filtered data:" << std::endl;
+    for(double num : filteredData) {
+        std::cout << num << " ";
+    }
+    std::cout << std::endl;
       printf(
          "|-------------------------+-------------------------|\n"
          "| # Vertices = %d   | # Edges = %d        |\n"
