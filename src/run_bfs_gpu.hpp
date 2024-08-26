@@ -8,9 +8,9 @@ using namespace sycl;
 // #include <sycl/ext/intel/fpga_extensions.hpp>
 #include <bitset>
 #include "functions.hpp"
-
+#include "unrolled_loop.hpp"
 #define MAX_NUM_LEVELS 100
-
+#define NUM_OF_GPUS 2
 
 // |  Memory Model Equivalence
 // |  CUDA                 SYCL
@@ -129,8 +129,10 @@ int upper_bound(const sycl::local_accessor<T> &arr, int n, int value) {
 //-- initialize Kernel for Exploring the neighbours of next to visit 
 //-- nodes
 //-------------------------------------------------------------------
-template <int krnl_id> class ExploreNeighbours;
-template <int krnl_id> class LevelGen;
+template <int krnl_id>
+class ExploreNeighbours;
+template <int krnl_id>
+class LevelGen;
 
 template <int krnl_id>
 event parallel_explorer_kernel(queue &q,
@@ -420,6 +422,7 @@ void GPURun(int vertexCount,
 
   auto Devs = sycl::device::get_devices(info::device_type::gpu);
 
+
   if (Devs.size() < 2) {
     std::cout << "Cannot test P2P capabilities, at least two devices are "
                  "required, exiting."
@@ -447,14 +450,21 @@ void GPURun(int vertexCount,
     }
 
   // Enables Devs[0] to access Devs[1] memory.
-    Devs[0].ext_oneapi_enable_peer_access(Devs[1]);
-    Devs[1].ext_oneapi_enable_peer_access(Devs[0]);
+    // Devs[0].ext_oneapi_enable_peer_access(Devs[1]);
+    // Devs[1].ext_oneapi_enable_peer_access(Devs[0]);
 
-
+fpga_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID_i) {
+  fpga_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID_j) {
+      if (gpuID_i != gpuID_j) {
+            Devs[gpuID_i].ext_oneapi_enable_peer_access(Devs[gpuID_j]);
+        }
+  });
+});
 
 
     // Compute kernel execution time
-    sycl::event levelEvent,exploreEvent;
+    std::vector<sycl::event> levelEvent(NUM_OF_GPUS);
+    std::vector<sycl::event> exploreEvent(NUM_OF_GPUS);
     sycl::event levelEventQ,exploreEventQ;
     sycl::event pipeEvent,resetEvent;
     sycl::event copybackhostEvent;
@@ -464,9 +474,12 @@ void GPURun(int vertexCount,
 
 
     std::vector<std::vector<Uint32>> distances(num_runs,DistanceHost);
-    std::vector<std::vector<Uint32>> distancesQ(num_runs,DistanceHost);
     std::vector<double> run_times(num_runs,0);
     int zero = 0;
+    std::vector<Uint32*> OffsetDevice(NUM_OF_GPUS);
+    std::vector<Uint32*> EdgesDevice(NUM_OF_GPUS);
+    std::vector<MyUint1*> VisitMaskDevice(NUM_OF_GPUS);
+    std::vector<MyUint1*> VisitDevice(NUM_OF_GPUS);
     for(int i =0; i < num_runs; i++){
       // Frontier Start
       std::vector<Uint32> frontierCountHostQ1(1,1);
@@ -477,22 +490,11 @@ void GPURun(int vertexCount,
       std::vector<Uint32> FrontierHostQ2(vertexCount,0);
       FrontierHostQ2[0] = sourceNode;
 
-      std::vector<Uint32> h_prefix_sum = {0,1,2};
 
 
-      // Frontier End
-      //  Uint32 *usm_pipe_global_h = malloc_device<Uint32>(vertexCount, Queues[0]);
-
-      Uint32 *usm_pipe_global_h = malloc<Uint32>(vertexCount, Queues[0], usm::alloc::device);
+      
       Uint32 *usm_pipe_global = malloc<Uint32>(vertexCount, Queues[0], usm::alloc::device);
-      Uint32 *usm_pipe_global_l = malloc<Uint32>(vertexCount, Queues[1], usm::alloc::device);
 
-      Uint32 *usm_pipe_global_h_mirror = malloc<Uint32>(vertexCount, Queues[1], usm::alloc::device);
-      Uint32 *usm_pipe_global_l_mirror = malloc<Uint32>(vertexCount, Queues[0], usm::alloc::device);
-
-      //  Uint32 *usm_pipe_global_h_mirror = malloc_device<Uint32>(vertexCount, Queues[1]);
-      //  Uint32 *usm_pipe_global_l_mirror = malloc_device<Uint32>(vertexCount, Queues[0]);
-      //  Uint32 *usm_pipe_global_l = malloc_device<Uint32>(vertexCount, Queues[1]);
 
     // // Create a vector to store the USM pointers
     // std::vector<Uint32*> usm_pipes_Q1;
@@ -501,63 +503,64 @@ void GPURun(int vertexCount,
     // usm_pipes_Q1.push_back(usm_pipe_1);
     // usm_pipes_Q1.push_back(usm_pipe_2);
 
+    // for(int gpuID =0; gpuID < num_gpus; gpuID++){
+    fpga_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
+    OffsetDevice[gpuID]        = malloc_device<Uint32>(OffsetHost[gpuID].size(), Queues[gpuID]);
+    EdgesDevice[gpuID]     = malloc_device<Uint32>(IndexHost[gpuID].size(), Queues[gpuID]); 
+    VisitMaskDevice[gpuID]    = malloc_device<MyUint1>(VisitMaskHost.size(), Queues[gpuID]); 
+    VisitDevice[gpuID]    = malloc_device<MyUint1>(VisitHost.size(), Queues[gpuID]); 
+
+    copyToDevice(Queues[gpuID],IndexHost[gpuID],EdgesDevice[gpuID]);
+    copyToDevice(Queues[gpuID],OffsetHost[gpuID],OffsetDevice[gpuID]);
+    copyToDevice(Queues[gpuID],VisitMaskHost,VisitMaskDevice[gpuID]);
+    copyToDevice(Queues[gpuID],VisitHost,VisitDevice[gpuID]);
+
+    });
     Uint32 *frontierCountDevice = malloc_device<Uint32>(1, Queues[0]);
-    Uint32* OffsetDevice        = malloc_device<Uint32>(OffsetHost[0].size(), Queues[0]);
-    Uint32 *EdgesDevice         = malloc_device<Uint32>(IndexHost[0].size(), Queues[0]); 
-    Uint32 *DistanceDevice      = malloc_device<Uint32>(DistanceHost.size(), Queues[0]); 
-    MyUint1 *VisitMaskDevice    = malloc_device<MyUint1>(VisitMaskHost.size(), Queues[0]); 
-    MyUint1 *VisitDevice        = malloc_device<MyUint1>(VisitHost.size(), Queues[0]); 
-
-
-    Uint32 *frontierCountDeviceQ = malloc_device<Uint32>(1, Queues[1]);
-    Uint32* OffsetDeviceQ        = malloc_device<Uint32>(OffsetHost[1].size(), Queues[1]);
-    Uint32 *EdgesDeviceQ         = malloc_device<Uint32>(IndexHost[1].size(), Queues[1]); 
-    Uint32 *DistanceDeviceQ      = malloc_device<Uint32>(DistanceHost.size(), Queues[1]); 
-    MyUint1 *VisitMaskDeviceQ    = malloc_device<MyUint1>(VisitMaskHost.size(), Queues[1]); 
-    MyUint1 *VisitDeviceQ        = malloc_device<MyUint1>(VisitHost.size(), Queues[1]); 
     
-    copyToDevice(Queues[0],FrontierHostQ1,usm_pipe_global_h);
+    Uint32* DistanceDevice    = malloc_device<Uint32>(DistanceHost.size(), Queues[0]); 
+
+
+
+
+    // OffsetDevice[1]        = malloc_device<Uint32>(OffsetHost[1].size(), Queues[1]);
+    // Uint32 *EdgesDeviceQ         = malloc_device<Uint32>(IndexHost[1].size(), Queues[1]); 
+    // Uint32 *DistanceDeviceQ      = malloc_device<Uint32>(DistanceHost.size(), Queues[1]); 
+    // MyUint1 *VisitMaskDeviceQ    = malloc_device<MyUint1>(VisitMaskHost.size(), Queues[1]); 
+    // MyUint1 *VisitDeviceQ        = malloc_device<MyUint1>(VisitHost.size(), Queues[1]); 
+    
     copyToDevice(Queues[0],FrontierHostQ1,usm_pipe_global);
-    // copyToDevice(Queues[0],FrontierHostQ1,usm_pipe_global_l_mirror);
-    copyToDevice(Queues[0],IndexHost[0],EdgesDevice);
-    copyToDevice(Queues[0],OffsetHost[0],OffsetDevice);
     copyToDevice(Queues[0],distances[i],DistanceDevice);
-    copyToDevice(Queues[0],VisitMaskHost,VisitMaskDevice);
-    copyToDevice(Queues[0],VisitHost,VisitDevice);
-
-    copyToDevice(Queues[1],FrontierHostQ2,usm_pipe_global_l);
-    // copyToDevice(Queues[1],FrontierHostQ2,usm_pipe_global_h_mirror);
-    copyToDevice(Queues[1],IndexHost[1],EdgesDeviceQ);
-    copyToDevice(Queues[1],OffsetHost[1],OffsetDeviceQ);
-    copyToDevice(Queues[1],distancesQ[i],DistanceDeviceQ);
-    copyToDevice(Queues[1],VisitMaskHost,VisitMaskDeviceQ);
-    copyToDevice(Queues[1],VisitHost,VisitDeviceQ);
 
 
-    Queues[1].copy(usm_pipe_global_h, usm_pipe_global_h_mirror, frontierCountHostQ1[0]).wait();
-    Queues[0].copy(usm_pipe_global_l, usm_pipe_global_l_mirror, frontierCountHostQ2[0]).wait();
+
+
     Queues[0].memcpy(frontierCountDevice, &zero, sizeof(Uint32));  
     double start_time = 0;
     double end_time = 0;
     for(int iteration=0; iteration < MAX_NUM_LEVELS; iteration++){
       if((frontierCountHostQ1[0]) == 0){
-        std::cout << "total number of iterations" << iteration << "\n";
+        // std::cout << "total number of iterations" << iteration << "\n";
         break;
       }    
        
 
+      // for(int gpuID = 0; gpuID < num_gpus; gpuID++){
+      // exploreEvent[gpuID] = parallel_explorer_kernel<0>(Queues[gpuID],frontierCountHostQ1[gpuID],iteration,OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, VisitMaskDevice[gpuID],VisitDevice[gpuID]);
+      // }
 
-      exploreEvent = parallel_explorer_kernel<0>(Queues[0],frontierCountHostQ1[0],iteration,OffsetDevice,EdgesDevice,usm_pipe_global, VisitMaskDevice,VisitDevice);
-      parallel_explorer_kernel<3>(Queues[1],frontierCountHostQ1[0],iteration,OffsetDeviceQ,EdgesDeviceQ,usm_pipe_global, VisitMaskDeviceQ,VisitDeviceQ);
-
-      Queues[0].wait();
-      Queues[1].wait(); 
-
-      levelEvent =parallel_levelgen_kernel<0>(Queues[0],vertexCount,VisitMaskDevice,VisitDevice,iteration,usm_pipe_global,frontierCountDevice,DistanceDevice);
-      levelEventQ =parallel_levelgen_kernel<1>(Queues[1],vertexCount,VisitMaskDeviceQ,VisitDeviceQ,iteration,usm_pipe_global,frontierCountDevice,DistanceDevice);
-     
-      Queues[0].wait();
-      Queues[1].wait();
+      fpga_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
+              exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],frontierCountHostQ1[0],iteration,OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, VisitMaskDevice[gpuID],VisitDevice[gpuID]);
+      });
+      fpga_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
+            Queues[gpuID].wait();
+      });
+      fpga_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
+            levelEvent[gpuID] =parallel_levelgen_kernel<gpuID>(Queues[gpuID],vertexCount,VisitMaskDevice[gpuID],VisitDevice[gpuID],iteration,usm_pipe_global,frontierCountDevice,DistanceDevice);
+      });
+      fpga_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
+            Queues[gpuID].wait();
+      });
 
 
 
@@ -567,37 +570,33 @@ void GPURun(int vertexCount,
       copybackhostEvent = Queues[0].memcpy(frontierCountDevice, &zero, sizeof(Uint32));
        
       // Capture execution times 
-      exploreDuration   += GetExecutionTime(exploreEvent);
-      levelDuration     += GetExecutionTime(levelEvent);
+      // exploreDuration   += GetExecutionTime(exploreEvent[0]);
+      // exploreDuration   += GetExecutionTime(exploreEvent[1]);
+      // levelDuration     += GetExecutionTime(levelEvent[0]);
       // exploreDurationQ  += GetExecutionTime(exploreEventQ);
-      levelDurationQ    += GetExecutionTime(levelEventQ);
+      // levelDurationQ    += GetExecutionTime(levelEvent[1]);
       // pipeDuration    += GetExecutionTime(pipeEvent);
       // resetDuration   += GetExecutionTime(resetEvent);
       // Increase the level by 1 
       if(iteration == 0)
-      start_time = exploreEvent.get_profiling_info<info::event_profiling::command_start>();
+      start_time = exploreEvent[0].get_profiling_info<info::event_profiling::command_start>();
     }
-        end_time = copybackhostEvent.get_profiling_info<info::event_profiling::command_end>();
+      end_time = copybackhostEvent.get_profiling_info<info::event_profiling::command_end>();
       // end_time = max(levelEvent.get_profiling_info<info::event_profiling::command_end>(),levelEventQ.get_profiling_info<info::event_profiling::command_end>());
       double total_time = (end_time - start_time)* 1e-6; // ns to ms
       run_times[i] = total_time;
       copyToHost(Queues[0],DistanceDevice,distances[i]);
 
 
+    fpga_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
+          sycl::free(OffsetDevice[gpuID], Queues[gpuID]);
+          sycl::free(EdgesDevice[gpuID], Queues[gpuID]);
+          sycl::free(VisitDevice[gpuID], Queues[gpuID]);
+          sycl::free(VisitMaskDevice[gpuID], Queues[gpuID]);
+    });
 
-    sycl::free(OffsetDevice, Queues[0]);
-    sycl::free(usm_pipe_global_h, Queues[0]);
-    sycl::free(EdgesDevice, Queues[0]);
     sycl::free(DistanceDevice, Queues[0]);
-    sycl::free(VisitDevice, Queues[0]);
-    sycl::free(VisitMaskDevice, Queues[0]);
-
-    sycl::free(usm_pipe_global_l, Queues[1]);
-    sycl::free(OffsetDeviceQ, Queues[1]);
-    sycl::free(EdgesDeviceQ, Queues[1]);
-    sycl::free(DistanceDeviceQ, Queues[1]);
-    sycl::free(VisitDeviceQ, Queues[1]);
-    sycl::free(VisitMaskDeviceQ, Queues[1]);
+    sycl::free(usm_pipe_global, Queues[0]);
 
     } // for loop num_runs
     // // Add corresponding elements of distances and distancesQ and store in distances

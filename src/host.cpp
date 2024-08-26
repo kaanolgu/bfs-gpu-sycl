@@ -99,7 +99,6 @@ int main(int argc, char * argv[])
   // Get the value of the argument after parsing
   int num_runs = std::stoi(parser.getArgument("num_runs"));
   std::string datasetName = parser.getArgument("dataset").c_str();
-  std::cout << datasetName << " a" << std::endl;
   int start_vertex = stoi(parser.getArgument("root"));
   int num_gpus =  stoi(parser.getArgument("num_gpus"));
 
@@ -124,11 +123,12 @@ int main(int argc, char * argv[])
   CSRGraph graph_cpu = loadMatrix(1,datasetName);
   std::cout << "#############################################################\n" << std::endl;
   numCols = graph_cpu.meta[1];  // cols -> total number of vertices
-  std::cout << "number of vertices "<< numCols << std::endl;
+  std::cout << "number of vertices - initial "<< numCols << std::endl;
   ////////////
   // FPGA
   ///////////
   // Dummy example total neighbours needs to be 74
+  
   for(int i = 0; i < num_gpus; i++){
   std::cout << "i: " << start_vertex<< ", num_Neighbours: "<< (graph.indptrMulti[i][start_vertex+1] - graph.indptrMulti[i][start_vertex]) << std::endl;
   std::cout << "i: " << 135368<< ", num_Neighbours: "<< (graph.indptrMulti[i][135368+1] - graph.indptrMulti[i][135368]) << std::endl;
