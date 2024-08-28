@@ -125,10 +125,10 @@ int main(int argc, char * argv[])
   numCols = graph_cpu.meta[1];  // cols -> total number of vertices
   std::cout << "number of vertices - initial "<< numCols << std::endl;
   ////////////
-  // FPGA
+  // GPU
   ///////////
   // Dummy example total neighbours needs to be 74
-  
+  if(NUM_OF_GPUS > 1){
   for(int i = 0; i < num_gpus; i++){
   std::cout << "i: " << start_vertex<< ", num_Neighbours: "<< (graph.indptrMulti[i][start_vertex+1] - graph.indptrMulti[i][start_vertex]) << std::endl;
   std::cout << "i: " << 135368<< ", num_Neighbours: "<< (graph.indptrMulti[i][135368+1] - graph.indptrMulti[i][135368]) << std::endl;
@@ -136,7 +136,7 @@ int main(int argc, char * argv[])
 
 std::cout << "begin addr : " << graph.indptrMulti[0][135368] << std::endl;
   
-
+  }
   // allocate mem for the result on host side
   std::vector<Uint32> h_dist(numCols,-1);
     // std::cout << "number of vertices "<< numCols << std::endl;
@@ -169,7 +169,7 @@ std::cout << "begin addr : " << graph.indptrMulti[0][135368] << std::endl;
 
   std::cout << std::setw(6) << std::left << "# Graph Information" << "\n Vertices (nodes) = " << numRows << " \n Edges = "<< numEdges << "\n";
   std::cout << "number of vertices "<< numCols << std::endl;
-
+  if(NUM_OF_GPUS > 1){
   GPURun(numRows,
                   graph.indsMulti,
                   graph.indptrMulti,
@@ -178,6 +178,18 @@ std::cout << "begin addr : " << graph.indptrMulti[0][135368] << std::endl;
                   h_dist,
                   start_vertex,numEdges,
                   num_runs);  
+  }else{
+    GPURun(numRows,
+                  graph.inds,
+                  graph.indptr,
+                  h_updating_graph_mask,
+                  h_graph_visited,
+                  h_dist,
+                  start_vertex,numEdges,
+                  num_runs); 
+  }
+
+  
 
   
   //////////////////////////////////////////////////

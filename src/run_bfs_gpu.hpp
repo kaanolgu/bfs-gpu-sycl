@@ -10,7 +10,7 @@ using namespace sycl;
 #include "functions.hpp"
 #include "unrolled_loop.hpp"
 #define MAX_NUM_LEVELS 100
-#define NUM_OF_GPUS 2
+#define NUM_OF_GPUS 4
 
 // |  Memory Model Equivalence
 // |  CUDA                 SYCL
@@ -373,9 +373,11 @@ return e;
 // This function instantiates the vector add kernel, which contains
 // a loop that adds up the two summand arrays and stores the result
 // into sum. This loop will be unrolled by the specified unroll_factor.
+// Template function to handle both types
+template<typename vectorT>
 void GPURun(int vertexCount, 
-                  std::vector<std::vector<Uint32>> &IndexHost,
-                  std::vector<std::vector<Uint32>> &OffsetHost,
+                  vectorT &IndexHost,
+                  vectorT &OffsetHost,
                   std::vector<MyUint1> &VisitMaskHost,
                   std::vector<MyUint1> &VisitHost,
                   std::vector<Uint32> &DistanceHost,
@@ -453,8 +455,8 @@ void GPURun(int vertexCount,
     // Devs[0].ext_oneapi_enable_peer_access(Devs[1]);
     // Devs[1].ext_oneapi_enable_peer_access(Devs[0]);
 
-fpga_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID_i) {
-  fpga_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID_j) {
+gpu_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID_i) {
+  gpu_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID_j) {
       if (gpuID_i != gpuID_j) {
             Devs[gpuID_i].ext_oneapi_enable_peer_access(Devs[gpuID_j]);
         }
@@ -504,14 +506,33 @@ fpga_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID_i) {
     // usm_pipes_Q1.push_back(usm_pipe_2);
 
     // for(int gpuID =0; gpuID < num_gpus; gpuID++){
-    fpga_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
-    OffsetDevice[gpuID]        = malloc_device<Uint32>(OffsetHost[gpuID].size(), Queues[gpuID]);
-    EdgesDevice[gpuID]     = malloc_device<Uint32>(IndexHost[gpuID].size(), Queues[gpuID]); 
+    gpu_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
+      size_t offsetSize;
+      size_t indexSize;
+      
+if constexpr (std::is_same_v<vectorT, std::vector<Uint32>>) {
+         offsetSize = OffsetHost.size();
+         indexSize = IndexHost.size();
+        } else if constexpr (std::is_same_v<vectorT, std::vector<std::vector<Uint32>>>) {
+           offsetSize = OffsetHost[gpuID].size();
+           indexSize = IndexHost[gpuID].size();
+        }
+
+    OffsetDevice[gpuID]        = malloc_device<Uint32>(offsetSize, Queues[gpuID]);
+    EdgesDevice[gpuID]     = malloc_device<Uint32>(indexSize, Queues[gpuID]); 
     VisitMaskDevice[gpuID]    = malloc_device<MyUint1>(VisitMaskHost.size(), Queues[gpuID]); 
     VisitDevice[gpuID]    = malloc_device<MyUint1>(VisitHost.size(), Queues[gpuID]); 
 
-    copyToDevice(Queues[gpuID],IndexHost[gpuID],EdgesDevice[gpuID]);
+
+if constexpr (std::is_same_v<vectorT, std::vector<Uint32>>) {
+         copyToDevice(Queues[gpuID],IndexHost,EdgesDevice[gpuID]);
+    copyToDevice(Queues[gpuID],OffsetHost,OffsetDevice[gpuID]);
+        } else if constexpr (std::is_same_v<vectorT, std::vector<std::vector<Uint32>>>) {
+           copyToDevice(Queues[gpuID],IndexHost[gpuID],EdgesDevice[gpuID]);
     copyToDevice(Queues[gpuID],OffsetHost[gpuID],OffsetDevice[gpuID]);
+        }
+    // copyToDevice(Queues[gpuID],IndexHost[gpuID],EdgesDevice[gpuID]);
+    // copyToDevice(Queues[gpuID],OffsetHost[gpuID],OffsetDevice[gpuID]);
     copyToDevice(Queues[gpuID],VisitMaskHost,VisitMaskDevice[gpuID]);
     copyToDevice(Queues[gpuID],VisitHost,VisitDevice[gpuID]);
 
@@ -549,16 +570,16 @@ fpga_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID_i) {
       // exploreEvent[gpuID] = parallel_explorer_kernel<0>(Queues[gpuID],frontierCountHostQ1[gpuID],iteration,OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, VisitMaskDevice[gpuID],VisitDevice[gpuID]);
       // }
 
-      fpga_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
+      gpu_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
               exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],frontierCountHostQ1[0],iteration,OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, VisitMaskDevice[gpuID],VisitDevice[gpuID]);
       });
-      fpga_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
+      gpu_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
             Queues[gpuID].wait();
       });
-      fpga_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
+      gpu_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
             levelEvent[gpuID] =parallel_levelgen_kernel<gpuID>(Queues[gpuID],vertexCount,VisitMaskDevice[gpuID],VisitDevice[gpuID],iteration,usm_pipe_global,frontierCountDevice,DistanceDevice);
       });
-      fpga_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
+      gpu_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
             Queues[gpuID].wait();
       });
 
@@ -588,7 +609,7 @@ fpga_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID_i) {
       copyToHost(Queues[0],DistanceDevice,distances[i]);
 
 
-    fpga_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
+    gpu_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
           sycl::free(OffsetDevice[gpuID], Queues[gpuID]);
           sycl::free(EdgesDevice[gpuID], Queues[gpuID]);
           sycl::free(VisitDevice[gpuID], Queues[gpuID]);
@@ -648,7 +669,8 @@ fpga_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID_i) {
     const int nameWidth     = 24;
     const int numWidth      = 24;
 // Define the threshold for anomaly detection
-    double threshold = 2.0; // This means we consider points beyond 2 standard deviations as anomalies
+    double threshold = 1.5; // This means we consider points beyond 1.5 standard deviations as anomalies
+    // https://bookdown.org/kevin_davisross/probsim-book/normal-distributions.html 87%
     // explanation for threshold : https://chatgpt.com/share/6e64d349-bdd6-4662-99c2-2d265dffd43c
     // Remove anomalies
     std::vector<double> filteredData = removeAnomalies(run_times, threshold);

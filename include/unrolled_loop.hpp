@@ -6,7 +6,7 @@
 
 #include "metaprogramming_utils.hpp"
 
-namespace fpga_tools {
+namespace gpu_tools {
 ///////////////////////////////////////////////////////////////////////////////
 //
 // Example usage for UnrolledLoop constexpr:
