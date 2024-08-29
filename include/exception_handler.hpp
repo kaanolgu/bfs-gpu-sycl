@@ -4,7 +4,7 @@
 #include <exception>
 #include <iostream>
 
-namespace fpga_tools {
+namespace gpu_tools {
 
 void exception_handler(sycl::exception_list exceptions) {
   for (std::exception_ptr const &e : exceptions) {
@@ -17,6 +17,6 @@ void exception_handler(sycl::exception_list exceptions) {
   }
 }
 
-} // namespace fpga_tools
+} // namespace gpu_tools
 
 #endif //__EXCEPTIONHANDLER_HPP__

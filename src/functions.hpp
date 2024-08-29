@@ -1,8 +1,7 @@
 #include <map>
-#define MAX_NUM_CU 4
-// using MyUint1 = ac_int<1, false>;
 #include "unrolled_loop.hpp"
-int numRows = 0,numCols =0,numNonz =0;
+#include "json.hpp"
+
 
 constexpr int log2(int num) {
     int result = 0;
@@ -141,4 +140,38 @@ std::vector<double> removeAnomalies(const std::vector<double>& data, double thre
         }
     }
     return filteredData;
+}
+
+
+// Print out data 
+
+// Constants for formatting
+const char separator = ' ';
+const int nameWidth = 24;
+const int numWidth = 24;
+
+// Function to print a separator line
+void printSeparator() {
+    std::cout << "|" << std::string(47, '-') << "|\n";
+}
+
+// Function to print a table header with two columns
+void printHeader(const std::string& header1, const std::string& header2) {
+    printSeparator();
+    std::cout << "| " << std::left << std::setw(nameWidth) << std::setfill(separator) << header1
+              << "| " << std::setw(numWidth) << std::setfill(separator) << header2 << " |\n";
+    printSeparator();
+}
+
+// Function to print a formatted row with a label and value
+void printRow(const std::string& label, const std::string& value) {
+    std::cout << "| " << std::left << std::setw(nameWidth) << std::setfill(separator) << label
+              << "| " << std::setw(numWidth) << std::setfill(separator) << value << " |\n";
+}
+
+// Function to format double values with fixed precision
+std::string formatDouble(double value, int precision = 2) {
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(precision) << value;
+    return oss.str();
 }

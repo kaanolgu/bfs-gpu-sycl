@@ -98,6 +98,6 @@ constexpr void UnrolledLoop(F&& f) {
   UnrolledLoop(make_index_range<start, end>{}, std::forward<F>(f));
 }
 
-}  // namespace fpga_tools
+}  // namespace gpu_tools
 
 #endif /* __UNROLLEDLOOP_HPP__ */

@@ -3,7 +3,7 @@
 
 #include <type_traits>
 
-namespace fpga_tools {
+namespace gpu_tools {
 
 //
 // The code below creates the constexprs 'make_integer_range'
@@ -135,6 +135,6 @@ struct is_sycl_pipe {
 template <typename T>
 inline constexpr bool is_sycl_pipe_v = is_sycl_pipe<T>::value;
 
-} // namespace fpga_tools
+} // namespace gpu_tools
 
 #endif  /* __METAPROGRAMMING_UTILS_HPP__ */

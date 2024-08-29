@@ -10,7 +10,6 @@ using namespace sycl;
 #include "functions.hpp"
 #include "unrolled_loop.hpp"
 #define MAX_NUM_LEVELS 100
-#define NUM_OF_GPUS 4
 
 // |  Memory Model Equivalence
 // |  CUDA                 SYCL
@@ -262,14 +261,6 @@ event parallel_levelgen_kernel(queue &q,
     // Setup the range
     nd_range<1> range(global_size, local_size);
         auto e = q.submit([&](handler& h) {
-          // Local memory for exclusive sum, shared within the work-group
-          // sycl::local_accessor<int> localVisitMask(local_size, h);
-          // sycl::local_accessor<int> local_sum(local_size, h);
-          // sycl::local_accessor<int> local_sum2(local_size, h);
-          // sycl::local_accessor<int> local_counter(local_size, h);
-                    // sycl::local_accessor<Uint32> degrees(local_size, h);
-                    // sycl::local_accessor<Uint32> vertices(local_size, h);
-          // sycl::local_accessor<int> local_counter(1, h);
         h.parallel_for<class LevelGen<krnl_id>>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
           const int gid = item.get_global_id(0);    // global id
           const int lid  = item.get_local_id(0); // threadIdx.x
@@ -292,74 +283,10 @@ event parallel_levelgen_kernel(queue &q,
                 usm_pipe[atomic_op_global.fetch_add(1)] = gid;
                 usm_visit_mask[gid]=0;
             
-                // local_counter[lid] = 1;
-                // vertices[lid] = gid;
+
             }
         }
-  //           else{
-  //             vertices[lid] = -1;
-  //             local_counter[lid] = 0;
-  //           }
-            
-  //       }else{
-  //         vertices[lid] = -1;
-  //         local_counter[lid] = 0;
-  //       }
-  //       group_barrier(item.get_group());
 
-
-
-
-  //           Uint32 th_deg = local_counter[lid];
-  //           //  total_nnz;
- 
-  //          /// 2. Exclusive sum of degrees to find total work items per block.
-  //            th_deg = sycl::exclusive_scan_over_group(item.get_group(), th_deg, sycl::plus<>());
-
-  //           local_sum[lid] = th_deg;
-
-  //           if(lid == blockDim -1)
-  //           th_deg +=local_counter[lid];
-            
-  //           local_sum2[lid] = th_deg;
-  //           sycl::group_barrier(item.get_group());
-
-  //           unsigned int total_nnz =  local_sum2[blockDim - 1];
-  //           degrees[lid] = local_sum[lid];
-  //       /// 3. Compute block offsets if there's an output frontier.
-  //         group_barrier(item.get_group());
-  //           // Define the atomic operation reference outside the loop
-  //         // printf("vertices = %d, lid = %d, degrees[lid] = %d, agg = %d\n", vertices[lid],lid, degrees[lid], total_nnz);
-
-  //         for (int i = lid;            // threadIdx.x
-  //      i < total_nnz;  // total degree to process
-  //      i += blockDim    // increment by blockDim.x
-  // ) {  
-
-  //        auto it = std::upper_bound(degrees.begin(),degrees.end(), i);
-  //     // int id = std::distance(degrees, it) - 1;
-  //   Uint32 id = std::distance(degrees.begin(), it)-1; // Return the distance minus 1
-  //   if(id < degrees.size()){
-  //           Uint32 v = vertices[id];
-  //               usm_dist[v] = iteration + 1;  
-                
-                
-  //               // Use atomic operation to update the global Frontier array
-  //               // sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,
-  //               //     sycl::memory_scope::device, 
-  //               //     sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
-
-  //               // Use atomic operation to update the global Frontier array
-  //               sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,
-  //           sycl::memory_scope::device, 
-  //           sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
-  //           if(local_counter[id]){
-  //               Frontier[atomic_op_global.fetch_add(1)] = v;
-  //               usm_visit_mask[v]=0;
-  //           }
-  //   }
-  // }
-        // group_barrier(item.get_group());
         });
         });
 return e;
@@ -381,7 +308,8 @@ void GPURun(int vertexCount,
                   std::vector<MyUint1> &VisitMaskHost,
                   std::vector<MyUint1> &VisitHost,
                   std::vector<Uint32> &DistanceHost,
-                  int sourceNode,int edgeCount,const int num_runs) noexcept(false) {
+                  int sourceNode,const int num_runs,
+                  nlohmann::json &newJsonObj) noexcept(false) {
  
 
   // Select either:
@@ -455,8 +383,8 @@ void GPURun(int vertexCount,
     // Devs[0].ext_oneapi_enable_peer_access(Devs[1]);
     // Devs[1].ext_oneapi_enable_peer_access(Devs[0]);
 
-gpu_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID_i) {
-  gpu_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID_j) {
+gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID_i) {
+  gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID_j) {
       if (gpuID_i != gpuID_j) {
             Devs[gpuID_i].ext_oneapi_enable_peer_access(Devs[gpuID_j]);
         }
@@ -465,8 +393,8 @@ gpu_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID_i) {
 
 
     // Compute kernel execution time
-    std::vector<sycl::event> levelEvent(NUM_OF_GPUS);
-    std::vector<sycl::event> exploreEvent(NUM_OF_GPUS);
+    std::vector<sycl::event> levelEvent(NUM_GPU);
+    std::vector<sycl::event> exploreEvent(NUM_GPU);
     sycl::event levelEventQ,exploreEventQ;
     sycl::event pipeEvent,resetEvent;
     sycl::event copybackhostEvent;
@@ -478,24 +406,22 @@ gpu_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID_i) {
     std::vector<std::vector<Uint32>> distances(num_runs,DistanceHost);
     std::vector<double> run_times(num_runs,0);
     int zero = 0;
-    std::vector<Uint32*> OffsetDevice(NUM_OF_GPUS);
-    std::vector<Uint32*> EdgesDevice(NUM_OF_GPUS);
-    std::vector<MyUint1*> VisitMaskDevice(NUM_OF_GPUS);
-    std::vector<MyUint1*> VisitDevice(NUM_OF_GPUS);
+    std::vector<Uint32*> OffsetDevice(NUM_GPU);
+    std::vector<Uint32*> EdgesDevice(NUM_GPU);
+    std::vector<MyUint1*> VisitMaskDevice(NUM_GPU);
+    std::vector<MyUint1*> VisitDevice(NUM_GPU);
+    std::vector<Uint32> FrontierHostQ1(vertexCount,0);
+
     for(int i =0; i < num_runs; i++){
       // Frontier Start
       std::vector<Uint32> frontierCountHostQ1(1,1);
-      std::vector<Uint32> frontierCountHostQ2(1,1);
-
-      std::vector<Uint32> FrontierHostQ1(vertexCount,0);
-      FrontierHostQ1[0] = sourceNode;
-      std::vector<Uint32> FrontierHostQ2(vertexCount,0);
-      FrontierHostQ2[0] = sourceNode;
-
-
 
       
+      std::fill(FrontierHostQ1.begin(), FrontierHostQ1.end(), 0);
+      FrontierHostQ1[0] = sourceNode;
+
       Uint32 *usm_pipe_global = malloc<Uint32>(vertexCount, Queues[0], usm::alloc::device);
+      Uint32* DistanceDevice    = malloc_device<Uint32>(DistanceHost.size(), Queues[0]); 
 
 
     // // Create a vector to store the USM pointers
@@ -506,40 +432,38 @@ gpu_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID_i) {
     // usm_pipes_Q1.push_back(usm_pipe_2);
 
     // for(int gpuID =0; gpuID < num_gpus; gpuID++){
-    gpu_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
+    gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
       size_t offsetSize;
       size_t indexSize;
       
-if constexpr (std::is_same_v<vectorT, std::vector<Uint32>>) {
+      if constexpr (std::is_same_v<vectorT, std::vector<Uint32>>) {
          offsetSize = OffsetHost.size();
          indexSize = IndexHost.size();
-        } else if constexpr (std::is_same_v<vectorT, std::vector<std::vector<Uint32>>>) {
+      } else if constexpr (std::is_same_v<vectorT, std::vector<std::vector<Uint32>>>) {
            offsetSize = OffsetHost[gpuID].size();
            indexSize = IndexHost[gpuID].size();
-        }
+      }
 
-    OffsetDevice[gpuID]        = malloc_device<Uint32>(offsetSize, Queues[gpuID]);
-    EdgesDevice[gpuID]     = malloc_device<Uint32>(indexSize, Queues[gpuID]); 
-    VisitMaskDevice[gpuID]    = malloc_device<MyUint1>(VisitMaskHost.size(), Queues[gpuID]); 
-    VisitDevice[gpuID]    = malloc_device<MyUint1>(VisitHost.size(), Queues[gpuID]); 
+      OffsetDevice[gpuID]        = malloc_device<Uint32>(offsetSize, Queues[gpuID]);
+      EdgesDevice[gpuID]     = malloc_device<Uint32>(indexSize, Queues[gpuID]); 
+      VisitMaskDevice[gpuID]    = malloc_device<MyUint1>(VisitMaskHost.size(), Queues[gpuID]); 
+      VisitDevice[gpuID]    = malloc_device<MyUint1>(VisitHost.size(), Queues[gpuID]); 
 
 
-if constexpr (std::is_same_v<vectorT, std::vector<Uint32>>) {
-         copyToDevice(Queues[gpuID],IndexHost,EdgesDevice[gpuID]);
-    copyToDevice(Queues[gpuID],OffsetHost,OffsetDevice[gpuID]);
-        } else if constexpr (std::is_same_v<vectorT, std::vector<std::vector<Uint32>>>) {
-           copyToDevice(Queues[gpuID],IndexHost[gpuID],EdgesDevice[gpuID]);
-    copyToDevice(Queues[gpuID],OffsetHost[gpuID],OffsetDevice[gpuID]);
-        }
-    // copyToDevice(Queues[gpuID],IndexHost[gpuID],EdgesDevice[gpuID]);
-    // copyToDevice(Queues[gpuID],OffsetHost[gpuID],OffsetDevice[gpuID]);
-    copyToDevice(Queues[gpuID],VisitMaskHost,VisitMaskDevice[gpuID]);
-    copyToDevice(Queues[gpuID],VisitHost,VisitDevice[gpuID]);
+      if constexpr (std::is_same_v<vectorT, std::vector<Uint32>>) {
+          copyToDevice(Queues[gpuID],IndexHost,EdgesDevice[gpuID]);
+          copyToDevice(Queues[gpuID],OffsetHost,OffsetDevice[gpuID]);
+      } else if constexpr (std::is_same_v<vectorT, std::vector<std::vector<Uint32>>>) {
+          copyToDevice(Queues[gpuID],IndexHost[gpuID],EdgesDevice[gpuID]);
+          copyToDevice(Queues[gpuID],OffsetHost[gpuID],OffsetDevice[gpuID]);
+      }
+  
+      copyToDevice(Queues[gpuID],VisitMaskHost,VisitMaskDevice[gpuID]);
+      copyToDevice(Queues[gpuID],VisitHost,VisitDevice[gpuID]);
 
     });
     Uint32 *frontierCountDevice = malloc_device<Uint32>(1, Queues[0]);
-    
-    Uint32* DistanceDevice    = malloc_device<Uint32>(DistanceHost.size(), Queues[0]); 
+
 
 
 
@@ -570,16 +494,16 @@ if constexpr (std::is_same_v<vectorT, std::vector<Uint32>>) {
       // exploreEvent[gpuID] = parallel_explorer_kernel<0>(Queues[gpuID],frontierCountHostQ1[gpuID],iteration,OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, VisitMaskDevice[gpuID],VisitDevice[gpuID]);
       // }
 
-      gpu_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
+      gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
               exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],frontierCountHostQ1[0],iteration,OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, VisitMaskDevice[gpuID],VisitDevice[gpuID]);
       });
-      gpu_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
+      gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
             Queues[gpuID].wait();
       });
-      gpu_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
+      gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
             levelEvent[gpuID] =parallel_levelgen_kernel<gpuID>(Queues[gpuID],vertexCount,VisitMaskDevice[gpuID],VisitDevice[gpuID],iteration,usm_pipe_global,frontierCountDevice,DistanceDevice);
       });
-      gpu_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
+      gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
             Queues[gpuID].wait();
       });
 
@@ -609,7 +533,7 @@ if constexpr (std::is_same_v<vectorT, std::vector<Uint32>>) {
       copyToHost(Queues[0],DistanceDevice,distances[i]);
 
 
-    gpu_tools::UnrolledLoop<NUM_OF_GPUS>([&](auto gpuID) {
+    gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
           sycl::free(OffsetDevice[gpuID], Queues[gpuID]);
           sycl::free(EdgesDevice[gpuID], Queues[gpuID]);
           sycl::free(VisitDevice[gpuID], Queues[gpuID]);
@@ -620,18 +544,7 @@ if constexpr (std::is_same_v<vectorT, std::vector<Uint32>>) {
     sycl::free(usm_pipe_global, Queues[0]);
 
     } // for loop num_runs
-    // // Add corresponding elements of distances and distancesQ and store in distances
-    // for (size_t i = 0; i < num_runs; ++i) {
-    //     for (size_t j = 0; j < distances[i].size(); ++j) {
-    //         if(distances[i][j] == -1 && distancesQ[i][j] != -1){
-    //           // update only if it is not updated with Queues[0]
-    //           distances[i][j] = distancesQ[i][j];
-    //         }
-    //     }
-    // }
-    // copy VisitDevice back to hostArray
-    // Queues[0].memcpy(&DistanceHost[0], DistanceDevice, DistanceHost.size() * sizeof(int));
-    // copyToHost(Queues[0],DistanceDevice,DistanceHost);
+
 
      DistanceHost = distances[num_runs-1];
     // sycl::free(OffsetDevice, Queues[0]);
@@ -654,55 +567,49 @@ if constexpr (std::is_same_v<vectorT, std::vector<Uint32>>) {
     }
 
 
-    // Check if all distances[i] vectors are identical
-    bool all_identical = std::all_of(distances.begin(), distances.end(), 
-                                      [&](const std::vector<Uint32>& vec) {
-                                          return vec == distances[0];
-                                      });
-    if (all_identical) {
-        std::cout << "All distances vectors are identical.\n";
-    } else {
-        std::cout << "Not all distances vectors are identical.\n";
-    }
 
-    const char separator    = ' ';
-    const int nameWidth     = 24;
-    const int numWidth      = 24;
-// Define the threshold for anomaly detection
+// Assume removeAnomalies function and threshold are defined elsewhere
     double threshold = 1.5; // This means we consider points beyond 1.5 standard deviations as anomalies
     // https://bookdown.org/kevin_davisross/probsim-book/normal-distributions.html 87%
     // explanation for threshold : https://chatgpt.com/share/6e64d349-bdd6-4662-99c2-2d265dffd43c
     // Remove anomalies
     std::vector<double> filteredData = removeAnomalies(run_times, threshold);
-   std::cout << std::accumulate(filteredData.begin(), filteredData.end(), 0.0) / filteredData.size();
-    // Output the filtered data
-    std::cout << "Filtered data:" << std::endl;
-    for(double num : filteredData) {
-        std::cout << num << " ";
+
+    // Output the filtered data in a formatted table
+    printHeader("Filtered", "Wall-Clock Time (ms)");
+    int index = 0;
+    for (const auto& time : filteredData) {
+        printRow("Run #" + std::to_string(index++) + ":", formatDouble(time));
     }
+    printSeparator();
+    printRow("Average (filtered) Time", formatDouble(std::accumulate(filteredData.begin(), filteredData.end(), 0.0) / filteredData.size()));
     std::cout << std::endl;
-      printf(
-         "|-------------------------+-------------------------|\n"
-         "| # Vertices = %d   | # Edges = %d        |\n"
-         "|-------------------------+-------------------------|\n"
-         "| Kernel                  |    Wall-Clock Time (ns) |\n"
-         "|-------------------------+-------------------------|\n",vertexCount,edgeCount);
-         for(int i =0; i < num_runs;i++)std::cout << run_times[i] << std::endl;
 
-  double total_time =std::accumulate(run_times.begin(), run_times.end(), 0.0) / run_times.size();
+    // Print additional information
+    printSeparator();
+    printHeader("Kernel", "Wall-Clock Time (ns)");
+    for (const auto& run_time : run_times) {
+        std::cout << run_time << std::endl;
+    }
 
-  std::cout << "| " << std::left << std::setw(nameWidth) << std::setfill(separator) << " exploreEvent  : " << "| " << std::setw(numWidth) << std::setfill(separator)  << std::to_string(exploreDuration*1000) + " (ms) " << "| " << std::endl;
-  printf("|-------------------------+-------------------------|\n");
-  std::cout << "| " << std::left << std::setw(nameWidth) << std::setfill(separator) << " pipeEvent    : " << "| " << std::setw(numWidth) << std::setfill(separator)  << std::to_string(pipeDuration*1000) + " (ms) " << "| " << std::endl;
-  std::cout << "| " << std::left << std::setw(nameWidth) << std::setfill(separator) << " levelEvent   : " << "| " << std::setw(numWidth) << std::setfill(separator)  << std::to_string(levelDuration*1000) + " (ms) "<< "| "  << std::endl;
-  printf("|-------------------------+-------------------------|\n");
-  std::cout << "| " << std::left << std::setw(nameWidth) << std::setfill(separator) << " resetEvent  : " << "| " << std::setw(numWidth) << std::setfill(separator)  << std::to_string(resetDuration*1000) + " (ms) " << "| " << std::endl;
-  printf("|-------------------------+-------------------------|\n");
-  std::cout << "| " << std::left << std::setw(nameWidth) << std::setfill(separator) << " Total Execution Time  :" << "| " << std::setw(numWidth) << std::setfill(separator)  << std::to_string(total_time) + " (ms) "<< "| "  << std::endl;
-  std::cout << "| " << std::left << std::setw(nameWidth) << std::setfill(separator) << " Throughput = "         << "| " << std::setw(numWidth) << std::setfill(separator)  << std::to_string((edgeCount/(1000000*total_time*1e-3))) + " (MTEPS)" << "| " << std::endl;;
-  printf("|-------------------------+-------------------------|\n");
+    double total_time = std::accumulate(run_times.begin(), run_times.end(), 0.0) / run_times.size();
+    double total_time_filtered = std::accumulate(filteredData.begin(), filteredData.end(), 0.0) / filteredData.size();
 
+    // Print events and execution times
+    printRow("exploreEvent:", formatDouble(exploreDuration * 1000) + " (ms)");
+    printSeparator();
+    printRow("pipeEvent:", formatDouble(pipeDuration * 1000) + " (ms)");
+    printRow("levelEvent:", formatDouble(levelDuration * 1000) + " (ms)");
+    printSeparator();
+    printRow("resetEvent:", formatDouble(resetDuration * 1000) + " (ms)");
+    printSeparator();
+    printRow("Total Execution Time:", formatDouble(total_time) + " (ms)");
+    printSeparator();
 
+    newJsonObj["avgExecutionTime"] = total_time;
+    newJsonObj["avgExecutionTimeFiltered"] = total_time_filtered;
+    newJsonObj["valid"] = all_match_host;
+ 
     // The queue destructor is invoked when q passes out of scope.
     // q's destructor invokes q's exception handler on any device exceptions.
   }
