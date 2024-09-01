@@ -5,3 +5,4 @@ build/
 report*
 1
 dataset/
+data.json

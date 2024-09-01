@@ -3,10 +3,9 @@ set(TARGET_NAME bfs)
 # set(EMULATOR_TARGET ${TARGET_NAME}.fpga_emu)
 # set(SIMULATOR_TARGET ${TARGET_NAME}.fpga_sim)
 # set(FPGA_TARGET ${TARGET_NAME}.fpga)
-set(GPU_TARGET_1 ${TARGET_NAME}_1.gpu)
-set(GPU_TARGET_2 ${TARGET_NAME}_2.gpu)
-set(GPU_TARGET_3 ${TARGET_NAME}_3.gpu)
-set(GPU_TARGET_4 ${TARGET_NAME}_4.gpu)
+
+# Define the GPU targets and corresponding GPU numbers
+set(GPU_TARGETS "1;2;3;4;5;6;7;8")
 
 # # FPGA device selection
 # if(NOT DEFINED DEVICE)
@@ -75,47 +74,59 @@ set(HARDWARE_LINK_FLAGS_GPU "-fsycl -fsycl-targets=nvptx64-nvidia-cuda ${USER_HA
 # use cmake -D USER_HARDWARE_FLAGS=<flags> to set extra flags for FPGA backend compilation
 
 
+foreach(GPU_NUMBER IN LISTS GPU_TARGETS)
+    set(GPU_TARGET ${TARGET_NAME}_${GPU_NUMBER}.gpu)
 
+    add_executable(${GPU_TARGET} ${SOURCE_FILE})
+    target_include_directories(${GPU_TARGET} PRIVATE ${PROJECT_SOURCE_DIR}/include)
+    target_include_directories(${GPU_TARGET} PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_compile_definitions(${GPU_TARGET} PUBLIC NUM_GPU=${GPU_NUMBER})
+    set_target_properties(${GPU_TARGET} PROPERTIES COMPILE_FLAGS "${EMULATOR_COMPILE_FLAGS_GPU}")
+    set_target_properties(${GPU_TARGET} PROPERTIES LINK_FLAGS "${HARDWARE_LINK_FLAGS_GPU}")
+
+    # Define a custom target for each GPU
+    add_custom_target(gpu${GPU_NUMBER} DEPENDS ${GPU_TARGET})
+endforeach()
+# ###############################################################################
+# ### GPU (NVIDIA)
+# ###############################################################################
+# add_executable(${GPU_TARGET_1} ${SOURCE_FILE})
+# target_include_directories(${GPU_TARGET_1} PRIVATE ${PROJECT_SOURCE_DIR}/include)
+# target_include_directories(${GPU_TARGET_1} PRIVATE ${PROJECT_SOURCE_DIR}/src)
+# target_compile_definitions(${GPU_TARGET_1} PUBLIC NUM_GPU=1)
+# set_target_properties(${GPU_TARGET_1} PROPERTIES COMPILE_FLAGS "${EMULATOR_COMPILE_FLAGS_GPU}")
+# set_target_properties(${GPU_TARGET_1} PROPERTIES LINK_FLAGS "${HARDWARE_LINK_FLAGS_GPU}")
+# add_custom_target(gpu1 DEPENDS ${GPU_TARGET_1})
+# ###############################################################################
+# ### GPU (NVIDIA)
+# ###############################################################################
+# add_executable(${GPU_TARGET_2} ${SOURCE_FILE})
+# target_include_directories(${GPU_TARGET_2} PRIVATE ${PROJECT_SOURCE_DIR}/include)
+# target_include_directories(${GPU_TARGET_2} PRIVATE ${PROJECT_SOURCE_DIR}/src)
+# target_compile_definitions(${GPU_TARGET_2} PUBLIC NUM_GPU=2)
+# set_target_properties(${GPU_TARGET_2} PROPERTIES COMPILE_FLAGS "${EMULATOR_COMPILE_FLAGS_GPU}")
+# set_target_properties(${GPU_TARGET_2} PROPERTIES LINK_FLAGS "${HARDWARE_LINK_FLAGS_GPU}")
+# add_custom_target(gpu2 DEPENDS ${GPU_TARGET_2})
+# ###############################################################################
+# ### GPU (NVIDIA)
+# ###############################################################################
+# add_executable(${GPU_TARGET_3} ${SOURCE_FILE})
+# target_include_directories(${GPU_TARGET_3} PRIVATE ${PROJECT_SOURCE_DIR}/include)
+# target_include_directories(${GPU_TARGET_3} PRIVATE ${PROJECT_SOURCE_DIR}/src)
+# target_compile_definitions(${GPU_TARGET_3} PUBLIC NUM_GPU=3)
+# set_target_properties(${GPU_TARGET_3} PROPERTIES COMPILE_FLAGS "${EMULATOR_COMPILE_FLAGS_GPU}")
+# set_target_properties(${GPU_TARGET_3} PROPERTIES LINK_FLAGS "${HARDWARE_LINK_FLAGS_GPU}")
+# add_custom_target(gpu3 DEPENDS ${GPU_TARGET_3})
 ###############################################################################
 ### GPU (NVIDIA)
 ###############################################################################
-add_executable(${GPU_TARGET_1} ${SOURCE_FILE})
-target_include_directories(${GPU_TARGET_1} PRIVATE ${PROJECT_SOURCE_DIR}/include)
-target_include_directories(${GPU_TARGET_1} PRIVATE ${PROJECT_SOURCE_DIR}/src)
-target_compile_definitions(${GPU_TARGET_1} PUBLIC NUM_GPU=1)
-set_target_properties(${GPU_TARGET_1} PROPERTIES COMPILE_FLAGS "${EMULATOR_COMPILE_FLAGS_GPU}")
-set_target_properties(${GPU_TARGET_1} PROPERTIES LINK_FLAGS "${HARDWARE_LINK_FLAGS_GPU}")
-add_custom_target(gpu1 DEPENDS ${GPU_TARGET_1})
-###############################################################################
-### GPU (NVIDIA)
-###############################################################################
-add_executable(${GPU_TARGET_2} ${SOURCE_FILE})
-target_include_directories(${GPU_TARGET_2} PRIVATE ${PROJECT_SOURCE_DIR}/include)
-target_include_directories(${GPU_TARGET_2} PRIVATE ${PROJECT_SOURCE_DIR}/src)
-target_compile_definitions(${GPU_TARGET_2} PUBLIC NUM_GPU=2)
-set_target_properties(${GPU_TARGET_2} PROPERTIES COMPILE_FLAGS "${EMULATOR_COMPILE_FLAGS_GPU}")
-set_target_properties(${GPU_TARGET_2} PROPERTIES LINK_FLAGS "${HARDWARE_LINK_FLAGS_GPU}")
-add_custom_target(gpu2 DEPENDS ${GPU_TARGET_2})
-###############################################################################
-### GPU (NVIDIA)
-###############################################################################
-add_executable(${GPU_TARGET_3} ${SOURCE_FILE})
-target_include_directories(${GPU_TARGET_3} PRIVATE ${PROJECT_SOURCE_DIR}/include)
-target_include_directories(${GPU_TARGET_3} PRIVATE ${PROJECT_SOURCE_DIR}/src)
-target_compile_definitions(${GPU_TARGET_3} PUBLIC NUM_GPU=3)
-set_target_properties(${GPU_TARGET_3} PROPERTIES COMPILE_FLAGS "${EMULATOR_COMPILE_FLAGS_GPU}")
-set_target_properties(${GPU_TARGET_3} PROPERTIES LINK_FLAGS "${HARDWARE_LINK_FLAGS_GPU}")
-add_custom_target(gpu3 DEPENDS ${GPU_TARGET_3})
-###############################################################################
-### GPU (NVIDIA)
-###############################################################################
-add_executable(${GPU_TARGET_4} ${SOURCE_FILE})
-target_include_directories(${GPU_TARGET_4} PRIVATE ${PROJECT_SOURCE_DIR}/include)
-target_include_directories(${GPU_TARGET_4} PRIVATE ${PROJECT_SOURCE_DIR}/src)
-target_compile_definitions(${GPU_TARGET_4} PUBLIC NUM_GPU=4)
-set_target_properties(${GPU_TARGET_4} PROPERTIES COMPILE_FLAGS "${EMULATOR_COMPILE_FLAGS_GPU}")
-set_target_properties(${GPU_TARGET_4} PROPERTIES LINK_FLAGS "${HARDWARE_LINK_FLAGS_GPU}")
-add_custom_target(gpu4 DEPENDS ${GPU_TARGET_4})
+# add_executable(${GPU_TARGET_4} ${SOURCE_FILE})
+# target_include_directories(${GPU_TARGET_4} PRIVATE ${PROJECT_SOURCE_DIR}/include)
+# target_include_directories(${GPU_TARGET_4} PRIVATE ${PROJECT_SOURCE_DIR}/src)
+# target_compile_definitions(${GPU_TARGET_4} PUBLIC NUM_GPU=4)
+# set_target_properties(${GPU_TARGET_4} PROPERTIES COMPILE_FLAGS "${EMULATOR_COMPILE_FLAGS_GPU}")
+# set_target_properties(${GPU_TARGET_4} PROPERTIES LINK_FLAGS "${HARDWARE_LINK_FLAGS_GPU}")
+# add_custom_target(gpu4 DEPENDS ${GPU_TARGET_4})
 # ###############################################################################
 # ### FPGA Emulator
 # ###############################################################################
