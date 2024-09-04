@@ -53,29 +53,30 @@ CSRGraph loadMatrix(Uint32 partitionCount, std::string datasetName) {
     std::string non_switch = getenv("PWD") + pth;
     std::string temp = datasetName;
     non_switch += temp + "-csc-" + std::to_string(partitionCount) + "/" + temp + "-csc-";
-
+    std::string str_meta = non_switch + "meta.bin";
+    readFromMM(str_meta.c_str(), graph.meta);
+    
     if (partitionCount == 1) {
         // Load data into single-dimensional vectors
-        std::string str_meta = non_switch + "0-meta.bin";
         std::string str_indptr = non_switch + "0-indptr.bin";
         std::string str_inds = non_switch + "0-inds.bin";
         
-        readFromMM(str_meta.c_str(), graph.meta);
+        
         readFromMM(str_indptr.c_str(), graph.indptr);
         readFromMM(str_inds.c_str(), graph.inds);
     } else {
         // Use multi-dimensional vectors for multiple partitions
         graph.isMultiDimensional = true;
-        graph.metaMulti.resize(partitionCount);
+        // graph.metaMulti.resize(partitionCount);
         graph.indptrMulti.resize(partitionCount);
         graph.indsMulti.resize(partitionCount);
 
         for (Uint32 i = 0; i < partitionCount; i++) {
-            std::string str_meta = non_switch + std::to_string(i) + "-meta.bin";
+            // std::string str_meta = non_switch + std::to_string(i) + "-meta.bin";
             std::string str_indptr = non_switch + std::to_string(i) + "-indptr.bin";
             std::string str_inds = non_switch + std::to_string(i) + "-inds.bin";
             
-            readFromMM(str_meta.c_str(), graph.metaMulti[i]);
+            // readFromMM(str_meta.c_str(), graph.metaMulti[i]);
             readFromMM(str_indptr.c_str(), graph.indptrMulti[i]);
             readFromMM(str_inds.c_str(), graph.indsMulti[i]);
         }

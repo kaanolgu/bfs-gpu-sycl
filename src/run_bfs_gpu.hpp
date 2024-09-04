@@ -41,40 +41,7 @@ using namespace sycl;
 // allowing computation to be split across said devices.
 #define THREADS_PER_BLOCK 256
 
-// Aliases for LSU Control Extension types
-// Implemented using template arguments such as prefetch & burst_coalesce
-// on the new ext::intel::lsu class to specify LSU style and modifiers
-// using PrefetchingLSU = ext::intel::lsu<ext::intel::prefetch<true>,ext::intel::statically_coalesce<false>>;
-// using PipelinedLSU = ext::intel::lsu<>;
-// using BurstCoalescedLSU = ext::intel::lsu<ext::intel::burst_coalesce<true>,ext::intel::statically_coalesce<false>>;
-// using CacheLSU = ext::intel::lsu<ext::intel::burst_coalesce<true>, ext::intel::cache<1024*1024>,ext::intel::statically_coalesce<false>>;
-// template <typename vertex_t>
-// class Limits {
-// public:
-//     static vertex_t invalid() {
-//         return std::numeric_limits<vertex_t>::max();
-//     }
 
-//     static bool is_valid(vertex_t v) {
-//         return v != invalid();
-//     }
-// };
-
-// // Define a custom binary operation
-// struct plus_op {
-//     template <typename T>
-//     T operator()(T a, T b) const {
-//         return a + b;
-//     }
-// };
-std::vector<sycl::device> get_two_devices() {
-  auto devs = sycl::device::get_devices();
-  if (devs.size() == 0)
-    throw "No devices available";
-  if (devs.size() == 1)
-    return {devs[0], devs[0]};
-  return {devs[0], devs[1]};
-}
 
 // initialize device arr with val, if needed set arr[pos] = pos_val
 template <typename T>
@@ -92,10 +59,7 @@ template <typename T>
 void copyToHost(queue &Q, T *usm_arr,std::vector<T> &arr){
   Q.memcpy(arr.data(),usm_arr, arr.size() * sizeof(T)).wait();
 }
-// Forward declare the kernel name in the global scope.
-// This FPGA best practice reduces name mangling in the optimization reports.
 
-// template <int unroll_factor> class LevelGenerator;
 //-------------------------------------------------------------------
 // Return the execution time of the event, in seconds
 //-------------------------------------------------------------------
@@ -144,12 +108,6 @@ event parallel_explorer_kernel(queue &q,
                                 MyUint1 *usm_visit)
     {
 
-      // Prepare Data 
-      // const int V = prefix_sum.back();
-      // we can't pass vectors to the sycl kernel so needs to be integers
-      // const int prefix_1 = prefix_sum[1]; 
-      // no need for this since it is same as V
-      // const int prefix_2 = prefix_sum[2]; 
 
 
       // Define the work-group size and the number of work-groups
@@ -305,50 +263,13 @@ template<typename vectorT>
 void GPURun(int vertexCount, 
                   vectorT &IndexHost,
                   vectorT &OffsetHost,
-                  std::vector<MyUint1> &VisitMaskHost,
-                  std::vector<MyUint1> &VisitHost,
+                  std::vector<MyUint1> &h_visit_mask,
+                  std::vector<MyUint1> &h_visit,
                   std::vector<Uint32> &DistanceHost,
                   int sourceNode,const int num_runs,
                   nlohmann::json &newJsonObj) noexcept(false) {
- 
-
-  // Select either:
-  //  - the FPGA emulator device (CPU emulation of the FPGA)
-  //  - the FPGA device (a real FPGA)
-// #if (DEVICE == FPGA_EMULATOR)
-  // auto device_selector = sycl::ext::intel::fpga_emulator_selector_v;
-// #elif (DEVICE == FPGA_DEVICE)
-  // auto device_selector = sycl::ext::intel::fpga_selector_v;
-#if (DEVICE == NVIDIA_GPU)
-  auto device_selector = sycl::gpu_selector_v;
-#endif
-
-
-
-  sycl::queue q{device_selector,
-                sycl::property::queue::enable_profiling{}};
-  std::cout << "Device: " << q.get_device().get_info<sycl::info::device::name>()
-            << std::endl;
-
-
-
 
   try {
-  //   auto devs = sycl::device::get_devices(info::device_type::gpu);
-
-  //   auto Queues[0] = sycl::queue{devs[0],
-  //               sycl::property::queue::enable_profiling{}};
-  //   auto Queues[1] = sycl::queue{devs[1],
-  //               sycl::property::queue::enable_profiling{}}; // if only one device is found, both queues
-  //                                   // will use same device
-
-  //  std::cout << "Running on devices:" << std::endl;
-  //   std::cout << "1:\t" << Queues[0].get_device().get_info<sycl::info::device::name>()
-  //             << std::endl;
-  //   std::cout << "2:\t" << Queues[1].get_device().get_info<sycl::info::device::name>()
-  //             << std::endl;
-
-
 
   auto Devs = sycl::device::get_devices(info::device_type::gpu);
 
@@ -395,7 +316,6 @@ gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID_i) {
     // Compute kernel execution time
     std::vector<sycl::event> levelEvent(NUM_GPU);
     std::vector<sycl::event> exploreEvent(NUM_GPU);
-    sycl::event levelEventQ,exploreEventQ;
     sycl::event pipeEvent,resetEvent;
     sycl::event copybackhostEvent;
     double exploreDuration=0,levelDuration=0;
@@ -408,46 +328,38 @@ gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID_i) {
     int zero = 0;
     std::vector<Uint32*> OffsetDevice(NUM_GPU);
     std::vector<Uint32*> EdgesDevice(NUM_GPU);
-    std::vector<MyUint1*> VisitMaskDevice(NUM_GPU);
-    std::vector<MyUint1*> VisitDevice(NUM_GPU);
+    std::vector<MyUint1*> usm_visit_mask(NUM_GPU);
+    std::vector<MyUint1*> usm_visit(NUM_GPU);
     std::vector<Uint32> FrontierHostQ1(vertexCount,0);
+    std::vector<Uint32> frontierCountHostQ1(1,1);
 
     for(int i =0; i < num_runs; i++){
       // Frontier Start
-      std::vector<Uint32> frontierCountHostQ1(1,1);
-
       
+
+      std::fill(frontierCountHostQ1.begin(), frontierCountHostQ1.end(), 1);
       std::fill(FrontierHostQ1.begin(), FrontierHostQ1.end(), 0);
       FrontierHostQ1[0] = sourceNode;
 
-      Uint32 *usm_pipe_global = malloc<Uint32>(vertexCount, Queues[0], usm::alloc::device);
+      Uint32* usm_pipe_global   = malloc_device<Uint32>(vertexCount, Queues[0]);
       Uint32* DistanceDevice    = malloc_device<Uint32>(DistanceHost.size(), Queues[0]); 
 
-
-    // // Create a vector to store the USM pointers
-    // std::vector<Uint32*> usm_pipes_Q1;
-
-    // // Add the USM pointers to the vector
-    // usm_pipes_Q1.push_back(usm_pipe_1);
-    // usm_pipes_Q1.push_back(usm_pipe_2);
-
-    // for(int gpuID =0; gpuID < num_gpus; gpuID++){
     gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
       size_t offsetSize;
       size_t indexSize;
       
       if constexpr (std::is_same_v<vectorT, std::vector<Uint32>>) {
-         offsetSize = OffsetHost.size();
-         indexSize = IndexHost.size();
+          offsetSize = OffsetHost.size();
+          indexSize = IndexHost.size();
       } else if constexpr (std::is_same_v<vectorT, std::vector<std::vector<Uint32>>>) {
-           offsetSize = OffsetHost[gpuID].size();
-           indexSize = IndexHost[gpuID].size();
+          offsetSize = OffsetHost[gpuID].size();
+          indexSize = IndexHost[gpuID].size();
       }
 
       OffsetDevice[gpuID]        = malloc_device<Uint32>(offsetSize, Queues[gpuID]);
       EdgesDevice[gpuID]     = malloc_device<Uint32>(indexSize, Queues[gpuID]); 
-      VisitMaskDevice[gpuID]    = malloc_device<MyUint1>(VisitMaskHost.size(), Queues[gpuID]); 
-      VisitDevice[gpuID]    = malloc_device<MyUint1>(VisitHost.size(), Queues[gpuID]); 
+      usm_visit_mask[gpuID]    = malloc_device<MyUint1>(h_visit_mask.size(), Queues[gpuID]); 
+      usm_visit[gpuID]    = malloc_device<MyUint1>(h_visit.size(), Queues[gpuID]); 
 
 
       if constexpr (std::is_same_v<vectorT, std::vector<Uint32>>) {
@@ -458,8 +370,8 @@ gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID_i) {
           copyToDevice(Queues[gpuID],OffsetHost[gpuID],OffsetDevice[gpuID]);
       }
   
-      copyToDevice(Queues[gpuID],VisitMaskHost,VisitMaskDevice[gpuID]);
-      copyToDevice(Queues[gpuID],VisitHost,VisitDevice[gpuID]);
+      copyToDevice(Queues[gpuID],h_visit_mask,usm_visit_mask[gpuID]);
+      copyToDevice(Queues[gpuID],h_visit,usm_visit[gpuID]);
 
     });
     Uint32 *frontierCountDevice = malloc_device<Uint32>(1, Queues[0]);
@@ -468,12 +380,7 @@ gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID_i) {
 
 
 
-    // OffsetDevice[1]        = malloc_device<Uint32>(OffsetHost[1].size(), Queues[1]);
-    // Uint32 *EdgesDeviceQ         = malloc_device<Uint32>(IndexHost[1].size(), Queues[1]); 
-    // Uint32 *DistanceDeviceQ      = malloc_device<Uint32>(DistanceHost.size(), Queues[1]); 
-    // MyUint1 *VisitMaskDeviceQ    = malloc_device<MyUint1>(VisitMaskHost.size(), Queues[1]); 
-    // MyUint1 *VisitDeviceQ        = malloc_device<MyUint1>(VisitHost.size(), Queues[1]); 
-    
+
     copyToDevice(Queues[0],FrontierHostQ1,usm_pipe_global);
     copyToDevice(Queues[0],distances[i],DistanceDevice);
 
@@ -485,23 +392,18 @@ gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID_i) {
     double end_time = 0;
     for(int iteration=0; iteration < MAX_NUM_LEVELS; iteration++){
       if((frontierCountHostQ1[0]) == 0){
-        // std::cout << "total number of iterations" << iteration << "\n";
         break;
       }    
        
 
-      // for(int gpuID = 0; gpuID < num_gpus; gpuID++){
-      // exploreEvent[gpuID] = parallel_explorer_kernel<0>(Queues[gpuID],frontierCountHostQ1[gpuID],iteration,OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, VisitMaskDevice[gpuID],VisitDevice[gpuID]);
-      // }
-
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-              exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],frontierCountHostQ1[0],iteration,OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, VisitMaskDevice[gpuID],VisitDevice[gpuID]);
+              exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],frontierCountHostQ1[0],iteration,OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, usm_visit_mask[gpuID],usm_visit[gpuID]);
       });
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
             Queues[gpuID].wait();
       });
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-            levelEvent[gpuID] =parallel_levelgen_kernel<gpuID>(Queues[gpuID],vertexCount,VisitMaskDevice[gpuID],VisitDevice[gpuID],iteration,usm_pipe_global,frontierCountDevice,DistanceDevice);
+            levelEvent[gpuID] =parallel_levelgen_kernel<gpuID>(Queues[gpuID],vertexCount,usm_visit_mask[gpuID],usm_visit[gpuID],iteration,usm_pipe_global,frontierCountDevice,DistanceDevice);
       });
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
             Queues[gpuID].wait();
@@ -536,8 +438,8 @@ gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID_i) {
     gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
           sycl::free(OffsetDevice[gpuID], Queues[gpuID]);
           sycl::free(EdgesDevice[gpuID], Queues[gpuID]);
-          sycl::free(VisitDevice[gpuID], Queues[gpuID]);
-          sycl::free(VisitMaskDevice[gpuID], Queues[gpuID]);
+          sycl::free(usm_visit[gpuID], Queues[gpuID]);
+          sycl::free(usm_visit_mask[gpuID], Queues[gpuID]);
     });
 
     sycl::free(DistanceDevice, Queues[0]);
@@ -551,8 +453,8 @@ gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID_i) {
     // sycl::free(usm_nodes_end, Queues[0]);
     // sycl::free(EdgesDevice, Queues[0]);
     // sycl::free(DistanceDevice, Queues[0]);
-    // sycl::free(VisitDevice, Queues[0]);
-    // sycl::free(VisitMaskDevice, Queues[0]);
+    // sycl::free(usm_visit, Queues[0]);
+    // sycl::free(usm_visit_mask, Queues[0]);
     // sycl::free(usm_mask, Queues[0]);
     // Check if each distances[i] is equal to DistanceHost
     bool all_match_host = true;
@@ -596,13 +498,6 @@ gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID_i) {
     double total_time_filtered = std::accumulate(filteredData.begin(), filteredData.end(), 0.0) / filteredData.size();
 
     // Print events and execution times
-    printRow("exploreEvent:", formatDouble(exploreDuration * 1000) + " (ms)");
-    printSeparator();
-    printRow("pipeEvent:", formatDouble(pipeDuration * 1000) + " (ms)");
-    printRow("levelEvent:", formatDouble(levelDuration * 1000) + " (ms)");
-    printSeparator();
-    printRow("resetEvent:", formatDouble(resetDuration * 1000) + " (ms)");
-    printSeparator();
     printRow("Total Execution Time:", formatDouble(total_time) + " (ms)");
     printSeparator();
 
