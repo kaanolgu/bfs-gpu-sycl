@@ -18,7 +18,7 @@
 
 using namespace std;
 namespace ext_oneapi = sycl::ext::oneapi;
-
+using json = nlohmann::json;
 
 
 //-------------------------------------------------------------------
@@ -37,18 +37,18 @@ void print_levels(std::vector<datatypeA>& A, std::string nameA, std::vector<data
     std::cout << "| " << std::setw(columnWidth) << std::left << nameA 
               << "| " << std::setw(columnWidth) << std::left << nameB << "|\n";
     printSeparator();
-    
+    std::cout << "CPU : ";
     // Print levels and their counts
     for (int i = 0; i < size; i++) {
         int countA = std::count(A.begin(), A.end(), i);
-        int countB = std::count(B.begin(), B.end(), i);
-        
-        std::cout << "| " << std::setw(columnWidth - 2) << std::left 
-                  << "Level #" + std::to_string(i) + ": " + std::to_string(countA) 
-                  << "| " << std::setw(columnWidth - 2) << std::left 
-                  << std::to_string(countB) << "|\n";
+        std::cout << std::to_string(countA) << ", "; 
     }
-    
+        std::cout << "\nGPU : ";
+    // Print levels and their counts
+    for (int i = 0; i < size; i++) {
+        int countB = std::count(B.begin(), B.end(), i);
+        std::cout << std::to_string(countB) << ", "; 
+    }
     // Print footer
     printSeparator();
     
@@ -153,50 +153,52 @@ int main(int argc, char * argv[])
   print_levels(host_level,"cpu",h_dist,"fpga",maxLevelCPU); // CPU Results
 
 
-    newJsonObj["num_gpus"] = NUM_GPU; // Adding an array
-    newJsonObj["dataset"] = datasetName;
+    // newJsonObj["num_gpus"] = NUM_GPU; // Adding an array
+    // newJsonObj["dataset"] = datasetName;
     newJsonObj["avgMTEPS"] = (static_cast<unsigned int>(newJsonObj["edgesCount"])/(1000000*static_cast<double>(newJsonObj["avgExecutionTime"])*1e-3));
     newJsonObj["avgMTEPSFilter"] = (static_cast<unsigned int>(newJsonObj["edgesCount"])/(1000000*static_cast<double>(newJsonObj["avgExecutionTimeFiltered"])*1e-3));
-    newJsonObj["coverage"] = static_cast<double>(newJsonObj["edgesCount"]) / numEdges * 100.0;
+    newJsonObj["maxMTEPSFilter"] = (static_cast<unsigned int>(newJsonObj["edgesCount"])/(1000000*static_cast<double>(newJsonObj["minExecutionTimeFiltered"])*1e-3));
+    newJsonObj["edgesCoverage"] = static_cast<double>(newJsonObj["edgesCount"]) / numEdges * 100.0;
 
 
 
     // Variable to hold the combined JSON data
-    nlohmann::json combinedJsonArray;
+    nlohmann::json combinedJsonObj;
 
     // Read existing data from the file, if it exists
     std::ifstream inFile("data.json");
     if (inFile.is_open()) {
         try {
-            // Parse the existing JSON array from the file
-            inFile >> combinedJsonArray;
-            // Check if the existing data is an array, if not create a new array
-            if (!combinedJsonArray.is_array()) {
-                combinedJsonArray = nlohmann::json::array();
+            // Parse the existing JSON object from the file
+            inFile >> combinedJsonObj;
+            // Check if the existing data is an object, if not create a new object
+            if (!combinedJsonObj.is_object()) {
+                combinedJsonObj = json::object();
             }
         } catch (const std::exception& e) {
             std::cerr << "Error reading or parsing existing JSON data: " << e.what() << std::endl;
-            // Initialize as a new array if reading fails
-            combinedJsonArray = nlohmann::json::array();
+            // Initialize as a new object if reading fails
+            combinedJsonObj = json::object();
         }
         inFile.close();
     } else {
-        // If the file doesn't exist, start with an empty array
-        combinedJsonArray = nlohmann::json::array();
+        // If the file doesn't exist, start with an empty object
+        combinedJsonObj = json::object();
     }
+    std::string datasetKey = datasetName + "_" + std::to_string(num_runs);
+    // Add the new JSON object under the key corresponding to NUM_GPU
+    combinedJsonObj[datasetKey][std::to_string(NUM_GPU)] = newJsonObj;
 
-    // Append the new JSON object to the combined JSON array
-    combinedJsonArray.push_back(newJsonObj);
-
-    // Save the combined JSON data back to the file
+    // Write the updated JSON object back to the file
     std::ofstream outFile("data.json");
     if (outFile.is_open()) {
-        outFile << combinedJsonArray.dump(4); // Write the JSON data with 4 spaces indentation
+        outFile << combinedJsonObj.dump(4); // Pretty-print with 4-space indentation
         outFile.close();
-        std::cout << "JSON data appended to 'data.json'." << std::endl;
     } else {
-        std::cerr << "Unable to open file for writing." << std::endl;
+        std::cerr << "Error opening file for writing." << std::endl;
     }
+
+
 
   return 0;
 }

@@ -119,10 +119,6 @@ event parallel_explorer_kernel(queue &q,
 
           auto e = q.submit([&](handler& h) {
             // Local memory for exclusive sum, shared within the work-group
-            // sycl::local_accessor<int> local_sum(local_size, h);
-            // sycl::local_accessor<int> local_sum2(local_size, h);
-            // sycl::local_accessor<Uint32> local_th_deg(local_size, h);
-            // sycl::local_accessor<Uint32> vertices(local_size, h);
             sycl::local_accessor<Uint32> sedges(local_size, h);
             sycl::local_accessor<Uint32> degrees(local_size, h);
           h.parallel_for<class ExploreNeighbours<krnl_id>>(range, [=](nd_item<1> item) {
@@ -135,24 +131,14 @@ event parallel_explorer_kernel(queue &q,
 
             device_ptr<Uint32> DevicePtr_start(usm_nodes_start);  
             device_ptr<Uint32> DevicePtr_end(usm_nodes_start + 1);  
-            device_ptr<Uint32> DevicePtr_edges(usm_edges);
 
             Uint32 v;
             Uint32 local_th_deg; // this variable is shared between workitems
           // this variable will be instantiated for each work-item separately
 
-          // Determine which pipe to read from based on gid
-          //  if (gid < V) {
-          //         v = usm_pipe_1[gid];
-          //         sedges[lid] = DevicePtr_start[v];
-          //         local_th_deg =DevicePtr_end[v] - DevicePtr_start[v];
-          //     }
-          //     else {
-          //         local_th_deg = 0;
-          //     }
-
+           // 1. Read from usm_pipe
           if (gid < V) {
-              // Read from usm_pipe
+              
               v = usm_pipe_1[gid];
               sedges[lid] = DevicePtr_start[v]; // Store in sedges at the correct global index
               local_th_deg = DevicePtr_end[v] - DevicePtr_start[v]; // Assuming this is how you're calculating degree
@@ -180,7 +166,6 @@ event parallel_explorer_kernel(queue &q,
     /// processing, and the corresponding edge, neighbor and weight tuple. Passed
     /// to the user-defined lambda operator to process. If there's an output, the
     /// resultant neighbor or invalid vertex is written to the output frontier.
-      // Implement a simple upper_bound algorithm for use in SYCL
     
       Uint32 it = upper_bound(degrees,length, i);
       Uint32 id =  it - 1;
@@ -189,8 +174,6 @@ event parallel_explorer_kernel(queue &q,
 
       if(!usm_visit[n]){
         usm_visit_mask[n] = 1;
-        // usm_visit[n] = 1;
-        // usm_dist[n] = iteration + 1;  
       }
     } 
           
@@ -221,29 +204,16 @@ event parallel_levelgen_kernel(queue &q,
         auto e = q.submit([&](handler& h) {
         h.parallel_for<class LevelGen<krnl_id>>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
           const int gid = item.get_global_id(0);    // global id
-          const int lid  = item.get_local_id(0); // threadIdx.x
-          const int blockIdx  = item.get_group(0); // blockIdx.x
-          const int gridDim   = item.get_group_range(0); // gridDim.x
-          const int blockDim  = item.get_local_range(0); // blockDim.x
-
-
-    // Load a chunk of usm_visit_mask into local memory
-        if (gid < V) {
-            MyUint1 vmask = usm_visit_mask[gid];
-            if(vmask == 1){
-
-              usm_dist[gid] = iteration + 1;  
+          if (gid < V) {
+              MyUint1 vmask = usm_visit_mask[gid];
+              if(vmask == 1){
+                usm_dist[gid] = iteration + 1;  
                 usm_visit[gid] = 1;
-                                sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,
-            sycl::memory_scope::device, 
-            sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
-            
+                sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::device, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
                 usm_pipe[atomic_op_global.fetch_add(1)] = gid;
                 usm_visit_mask[gid]=0;
-            
-
-            }
-        }
+              }
+          }
 
         });
         });
@@ -300,27 +270,22 @@ void GPURun(int vertexCount,
               << std::endl;
     }
 
-  // Enables Devs[0] to access Devs[1] memory.
-    // Devs[0].ext_oneapi_enable_peer_access(Devs[1]);
-    // Devs[1].ext_oneapi_enable_peer_access(Devs[0]);
-
-gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID_i) {
-  gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID_j) {
-      if (gpuID_i != gpuID_j) {
-            Devs[gpuID_i].ext_oneapi_enable_peer_access(Devs[gpuID_j]);
-        }
+  // Enables Devs[x] to access Devs[y] memory and vice versa.
+  gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID_i) {
+    gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID_j) {
+        if (gpuID_i != gpuID_j) {
+              Devs[gpuID_i].ext_oneapi_enable_peer_access(Devs[gpuID_j]);
+          }
+    });
   });
-});
 
 
     // Compute kernel execution time
     std::vector<sycl::event> levelEvent(NUM_GPU);
     std::vector<sycl::event> exploreEvent(NUM_GPU);
-    sycl::event pipeEvent,resetEvent;
     sycl::event copybackhostEvent;
-    double exploreDuration=0,levelDuration=0;
-    double exploreDurationQ=0,levelDurationQ=0;
-    double pipeDuration=0,resetDuration=0;
+    // double levelDuration=0;
+
 
 
     std::vector<std::vector<Uint32>> distances(num_runs,DistanceHost);
@@ -330,16 +295,15 @@ gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID_i) {
     std::vector<Uint32*> EdgesDevice(NUM_GPU);
     std::vector<MyUint1*> usm_visit_mask(NUM_GPU);
     std::vector<MyUint1*> usm_visit(NUM_GPU);
-    std::vector<Uint32> FrontierHostQ1(vertexCount,0);
-    std::vector<Uint32> frontierCountHostQ1(1,1);
-
+    std::vector<Uint32> h_pipe(vertexCount,0);
+    std::vector<Uint32> h_pipe_count(1,1);
     for(int i =0; i < num_runs; i++){
       // Frontier Start
       
 
-      std::fill(frontierCountHostQ1.begin(), frontierCountHostQ1.end(), 1);
-      std::fill(FrontierHostQ1.begin(), FrontierHostQ1.end(), 0);
-      FrontierHostQ1[0] = sourceNode;
+      std::fill(h_pipe_count.begin(), h_pipe_count.end(), 1);
+      std::fill(h_pipe.begin(), h_pipe.end(), 0);
+      h_pipe[0] = sourceNode;
 
       Uint32* usm_pipe_global   = malloc_device<Uint32>(vertexCount, Queues[0]);
       Uint32* DistanceDevice    = malloc_device<Uint32>(DistanceHost.size(), Queues[0]); 
@@ -381,23 +345,24 @@ gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID_i) {
 
 
 
-    copyToDevice(Queues[0],FrontierHostQ1,usm_pipe_global);
+    copyToDevice(Queues[0],h_pipe,usm_pipe_global);
     copyToDevice(Queues[0],distances[i],DistanceDevice);
 
 
 
 
     Queues[0].memcpy(frontierCountDevice, &zero, sizeof(Uint32));  
+    
     double start_time = 0;
     double end_time = 0;
     for(int iteration=0; iteration < MAX_NUM_LEVELS; iteration++){
-      if((frontierCountHostQ1[0]) == 0){
+      if((h_pipe_count[0]) == 0){
         break;
       }    
        
 
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-              exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],frontierCountHostQ1[0],iteration,OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, usm_visit_mask[gpuID],usm_visit[gpuID]);
+              exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],iteration,OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, usm_visit_mask[gpuID],usm_visit[gpuID]);
       });
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
             Queues[gpuID].wait();
@@ -411,23 +376,21 @@ gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID_i) {
 
 
 
-      copyToHost(Queues[0],frontierCountDevice,frontierCountHostQ1);
+      copyToHost(Queues[0],frontierCountDevice,h_pipe_count);
       
       Queues[0].wait();
       copybackhostEvent = Queues[0].memcpy(frontierCountDevice, &zero, sizeof(Uint32));
        
       // Capture execution times 
-      // exploreDuration   += GetExecutionTime(exploreEvent[0]);
-      // exploreDuration   += GetExecutionTime(exploreEvent[1]);
       // levelDuration     += GetExecutionTime(levelEvent[0]);
-      // exploreDurationQ  += GetExecutionTime(exploreEventQ);
-      // levelDurationQ    += GetExecutionTime(levelEvent[1]);
-      // pipeDuration    += GetExecutionTime(pipeEvent);
-      // resetDuration   += GetExecutionTime(resetEvent);
       // Increase the level by 1 
-      if(iteration == 0)
-      start_time = exploreEvent[0].get_profiling_info<info::event_profiling::command_start>();
+      
+      if(iteration == 0){
+           start_time = exploreEvent[0].get_profiling_info<info::event_profiling::command_start>();
+      }
+      
     }
+      
       end_time = copybackhostEvent.get_profiling_info<info::event_profiling::command_end>();
       // end_time = max(levelEvent.get_profiling_info<info::event_profiling::command_end>(),levelEventQ.get_profiling_info<info::event_profiling::command_end>());
       double total_time = (end_time - start_time)* 1e-6; // ns to ms
@@ -448,14 +411,7 @@ gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID_i) {
     } // for loop num_runs
 
 
-     DistanceHost = distances[num_runs-1];
-    // sycl::free(OffsetDevice, Queues[0]);
-    // sycl::free(usm_nodes_end, Queues[0]);
-    // sycl::free(EdgesDevice, Queues[0]);
-    // sycl::free(DistanceDevice, Queues[0]);
-    // sycl::free(usm_visit, Queues[0]);
-    // sycl::free(usm_visit_mask, Queues[0]);
-    // sycl::free(usm_mask, Queues[0]);
+    DistanceHost = distances[num_runs-1];
     // Check if each distances[i] is equal to DistanceHost
     bool all_match_host = true;
     for(int i =0; i < num_runs; i++){
@@ -478,31 +434,36 @@ gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID_i) {
     std::vector<double> filteredData = removeAnomalies(run_times, threshold);
 
     // Output the filtered data in a formatted table
-    printHeader("Filtered", "Wall-Clock Time (ms)");
-    int index = 0;
-    for (const auto& time : filteredData) {
-        printRow("Run #" + std::to_string(index++) + ":", formatDouble(time));
-    }
+    // printHeader("Filtered", "Wall-Clock Time (ms)");
+    // int index = 0;
+    // for (const auto& time : filteredData) {
+    //     printRow("Run #" + std::to_string(index++) + ":", formatDouble(time));
+    // }
     printSeparator();
     printRow("Average (filtered) Time", formatDouble(std::accumulate(filteredData.begin(), filteredData.end(), 0.0) / filteredData.size()));
+    printSeparator();
+    printRow("Minimum (filtered) Time", formatDouble(*std::min_element(filteredData.begin(), filteredData.end())));
     std::cout << std::endl;
 
     // Print additional information
     printSeparator();
-    printHeader("Kernel", "Wall-Clock Time (ns)");
-    for (const auto& run_time : run_times) {
-        std::cout << run_time << std::endl;
-    }
+    // printHeader("Kernel", "Wall-Clock Time (ns)");
+    // for (const auto& run_time : run_times) {
+    //     std::cout << run_time << std::endl;
+    // }
 
     double total_time = std::accumulate(run_times.begin(), run_times.end(), 0.0) / run_times.size();
     double total_time_filtered = std::accumulate(filteredData.begin(), filteredData.end(), 0.0) / filteredData.size();
+    double minimum_time_filtered = *std::min_element(filteredData.begin(), filteredData.end());
 
     // Print events and execution times
     printRow("Total Execution Time:", formatDouble(total_time) + " (ms)");
     printSeparator();
 
+    newJsonObj["rawExecutionTimeAll"] = run_times;
     newJsonObj["avgExecutionTime"] = total_time;
     newJsonObj["avgExecutionTimeFiltered"] = total_time_filtered;
+    newJsonObj["minExecutionTimeFiltered"] = minimum_time_filtered;
     newJsonObj["valid"] = all_match_host;
  
     // The queue destructor is invoked when q passes out of scope.
