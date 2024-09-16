@@ -32,11 +32,6 @@ void print_levels(std::vector<datatypeA>& A, std::string nameA, std::vector<data
     
     // Print header
     printSeparator();
-    std::cout << "|                    VERIFY RESULTS                 |\n";
-    printSeparator();
-    std::cout << "| " << std::setw(columnWidth) << std::left << nameA 
-              << "| " << std::setw(columnWidth) << std::left << nameB << "|\n";
-    printSeparator();
     std::cout << "CPU : ";
     // Print levels and their counts
     for (int i = 0; i < size; i++) {
@@ -49,19 +44,17 @@ void print_levels(std::vector<datatypeA>& A, std::string nameA, std::vector<data
         int countB = std::count(B.begin(), B.end(), i);
         std::cout << std::to_string(countB) << ", "; 
     }
-    // Print footer
-    printSeparator();
     
     // Verify results and print the test status
     bool passed = std::equal(A.begin(), A.end(), B.begin());
     
     if (passed) {
-        std::cout << "| " << std::setw(52) << std::left << "TEST PASSED!" << "|\n";
+        std::cout << "\n TEST PASSED!" << "\n\n";
     } else {
-        std::cout << "| " << std::setw(52) << std::left << "TEST FAILED!" << "|\n";
+        std::cout << "\n TEST FAILED!" << "\n\n";
     }
     
-    printSeparator();
+
 }
 
 

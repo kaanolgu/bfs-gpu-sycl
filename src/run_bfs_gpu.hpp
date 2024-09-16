@@ -443,9 +443,6 @@ void GPURun(int vertexCount,
     printRow("Average (filtered) Time", formatDouble(std::accumulate(filteredData.begin(), filteredData.end(), 0.0) / filteredData.size()));
     printSeparator();
     printRow("Minimum (filtered) Time", formatDouble(*std::min_element(filteredData.begin(), filteredData.end())));
-    std::cout << std::endl;
-
-    // Print additional information
     printSeparator();
     // printHeader("Kernel", "Wall-Clock Time (ns)");
     // for (const auto& run_time : run_times) {
