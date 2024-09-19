@@ -124,8 +124,6 @@ event parallel_explorer_kernel(queue &q,
           h.parallel_for<class ExploreNeighbours<krnl_id>>(range, [=](nd_item<1> item) {
             const int gid = item.get_global_id(0);    // global id
             const int lid  = item.get_local_id(0); // threadIdx.x
-            const int blockIdx  = item.get_group(0); // blockIdx.x
-            const int gridDim   = item.get_group_range(0); // gridDim.x
             const int blockDim  = item.get_local_range(0); // blockDim.x
 
 
@@ -202,18 +200,70 @@ event parallel_levelgen_kernel(queue &q,
     // Setup the range
     nd_range<1> range(global_size, local_size);
         auto e = q.submit([&](handler& h) {
+            // Local memory for exclusive sum, shared within the work-group
+            sycl::local_accessor<Uint32> sedges(local_size, h);
+            sycl::local_accessor<Uint32> degrees(local_size, h);
         h.parallel_for<class LevelGen<krnl_id>>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
-          const int gid = item.get_global_id(0);    // global id
+            const int gid = item.get_global_id(0);    // global id
+            const int lid  = item.get_local_id(0); // threadIdx.x
+            const int blockDim  = item.get_local_range(0); // blockDim.x
+
+            Uint32 v;
+            Uint32 local_th_deg; // this variable is shared between workitems
+
+
           if (gid < V) {
-              MyUint1 vmask = usm_visit_mask[gid];
-              if(vmask == 1){
-                usm_dist[gid] = iteration + 1;  
-                usm_visit[gid] = 1;
-                sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::device, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
-                usm_pipe[atomic_op_global.fetch_add(1)] = gid;
-                usm_visit_mask[gid]=0;
-              }
+              
+              // v = usm_visit_mask[gid];
+              sedges[lid] = gid; // Store in sedges at the correct global index
+              local_th_deg = usm_visit_mask[gid]; // Assuming this is how you're calculating degree
+          }  else {
+              local_th_deg = 0;
           }
+
+            // 2. Exclusive sum of degrees to find total work items per block.
+            Uint32 th_deg = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg, sycl::plus<>());
+            degrees[lid] = th_deg;
+
+
+            // 3. Cumulative sum of total number of nonzeros 
+            Uint32 total_nnz = reduce_over_group(item.get_group(), local_th_deg, sycl::plus<>());
+            Uint32 length = (V < gid - lid + blockDim) ? (V - (gid -lid)) : blockDim;
+            sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::device, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
+    
+    for (int i = lid;            // threadIdx.x
+        i < total_nnz;  // total degree to process
+        i += blockDim    // increment by blockDim.x
+    ) {
+
+    /// 4. Compute. Using binary search, find the source vertex each thread is
+    /// processing, and the corresponding edge, neighbor and weight tuple. Passed
+    /// to the user-defined lambda operator to process. If there's an output, the
+    /// resultant neighbor or invalid vertex is written to the output frontier.
+    
+      Uint32 it = upper_bound(degrees,length, i);
+      Uint32 id =  it - 1;
+      Uint32  e = sedges[id] + i  - degrees[id]; 
+      Uint32  n  = e;   
+      usm_dist[n] = iteration + 1; 
+      usm_visit[n] = 1;
+      usm_visit_mask[n] = 0;
+      usm_pipe[atomic_op_global.fetch_add(1)] = sedges[id];
+  
+    } 
+          // if (gid < V) {
+          //     MyUint1 vmask = usm_visit_mask[gid];
+          //     if(vmask == 1){
+          //       usm_dist[gid] = iteration + 1;  
+          //       usm_visit[gid] = 1;
+          //       sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::device, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
+          //       usm_pipe[atomic_op_global.fetch_add(1)] = gid;
+          //       usm_visit_mask[gid]=0;
+          //     }
+          // }
+          
+          
+          // usm_pipe_size[0] = 0;
 
         });
         });
@@ -355,7 +405,7 @@ void GPURun(int vertexCount,
     
     double start_time = 0;
     double end_time = 0;
-    for(int iteration=0; iteration < MAX_NUM_LEVELS; iteration++){
+    for(int iteration=0; iteration < 2; iteration++){
       if((h_pipe_count[0]) == 0){
         break;
       }    
@@ -417,11 +467,11 @@ void GPURun(int vertexCount,
     for(int i =0; i < num_runs; i++){
       if (!std::equal(distances[i].begin(), distances[i].end(), DistanceHost.begin())) {
             all_match_host = false;
-            std::cout << "distances[" << i << "] does not match DistanceHost.\n";
+            std::cout << "distances[" << i << "] does not match others on GPU.\n";
         }
     }
      if (all_match_host) {
-        std::cout << "All distances vectors match DistanceHost.\n";
+        std::cout << "All distances vectors match each other on GPU.\n";
     }
 
 
