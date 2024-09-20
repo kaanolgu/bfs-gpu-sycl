@@ -204,7 +204,6 @@ event parallel_levelgen_kernel(queue &q,
             // Local memory for exclusive sum, shared within the work-group
             sycl::local_accessor<Uint32> sedges(local_size, h);
             sycl::local_accessor<Uint32> degrees(local_size, h);
-             sycl::local_accessor<Uint32> shared_size(local_size, h);
 
         h.parallel_for<class LevelGen<krnl_id>>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
             const int gid = item.get_global_id(0);    // global id
@@ -223,26 +222,25 @@ event parallel_levelgen_kernel(queue &q,
           }  else {
               local_th_deg = 0;
           }
-            sycl::group_barrier(item.get_group());
+
             // 2. Exclusive sum of degrees to find total work items per block.
             Uint32 th_deg = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg, sycl::plus<>());
             degrees[lid] = th_deg;
 
-            sycl::group_barrier(item.get_group());
             // 3. Cumulative sum of total number of nonzeros 
             Uint32 total_nnz = reduce_over_group(item.get_group(), local_th_deg, sycl::plus<>());
             Uint32 length = (V < gid - lid + blockDim) ? (V - (gid -lid)) : blockDim;
-            sycl::group_barrier(item.get_group());
+    
 
-            sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::device, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
-            int old_pipe_size = 0, temp_pipe_value = 0;
+            
+            Uint32 temp_pipe_value = 0;
             if(lid == 0){
-              temp_pipe_value = total_nnz;
-              shared_size[0] = atomic_op_global.fetch_add(temp_pipe_value);  
+              sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::device, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
+              temp_pipe_value = atomic_op_global.fetch_add(total_nnz);  
             }
-            sycl::group_barrier(item.get_group());
-            old_pipe_size = shared_size[0];
-            sycl::group_barrier(item.get_group());
+            Uint32 old_pipe_size = reduce_over_group(item.get_group(), temp_pipe_value, sycl::plus<>());
+
+            
 
     for (int i = lid;            // threadIdx.x
         i < total_nnz;  // total degree to process
@@ -257,11 +255,11 @@ event parallel_levelgen_kernel(queue &q,
       Uint32 it = upper_bound(degrees,length, i);
       Uint32 id =  it - 1;
       Uint32  e = sedges[id] + i  - degrees[id]; 
-      Uint32  n  = e;   
-      usm_dist[n] = iteration + 1; 
-      usm_visit[n] = 1;
-      usm_visit_mask[n] = 0;
-      usm_pipe[old_pipe_size + i ] = sedges[id];
+
+      usm_dist[e] = iteration + 1; 
+      usm_visit[e] = 1;
+      usm_visit_mask[e] = 0;
+      usm_pipe[old_pipe_size + i ] = e;
     } 
 
     
