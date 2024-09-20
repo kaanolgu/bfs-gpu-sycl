@@ -197,12 +197,14 @@ event parallel_levelgen_kernel(queue &q,
     const size_t local_size = THREADS_PER_BLOCK;  // Number of work-items per work-group
     const size_t global_size = ((V + local_size - 1) / local_size) * local_size;
 
+
     // Setup the range
     nd_range<1> range(global_size, local_size);
         auto e = q.submit([&](handler& h) {
             // Local memory for exclusive sum, shared within the work-group
             sycl::local_accessor<Uint32> sedges(local_size, h);
             sycl::local_accessor<Uint32> degrees(local_size, h);
+             sycl::local_accessor<Uint32> shared_size(local_size, h);
 
         h.parallel_for<class LevelGen<krnl_id>>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
             const int gid = item.get_global_id(0);    // global id
@@ -221,7 +223,7 @@ event parallel_levelgen_kernel(queue &q,
           }  else {
               local_th_deg = 0;
           }
-            // sycl::group_barrier(item.get_group());
+            sycl::group_barrier(item.get_group());
             // 2. Exclusive sum of degrees to find total work items per block.
             Uint32 th_deg = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg, sycl::plus<>());
             degrees[lid] = th_deg;
@@ -230,19 +232,17 @@ event parallel_levelgen_kernel(queue &q,
             // 3. Cumulative sum of total number of nonzeros 
             Uint32 total_nnz = reduce_over_group(item.get_group(), local_th_deg, sycl::plus<>());
             Uint32 length = (V < gid - lid + blockDim) ? (V - (gid -lid)) : blockDim;
-            // sycl::group_barrier(item.get_group());
+            sycl::group_barrier(item.get_group());
 
-            // sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::device, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
-            sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::device, sycl::access::address_space::global_space> atomic_op_global_clone(usm_pipe_size[0]);
-            int old_pipe_size = 0, temp_pipe_value;
-            if(lid == 0 && gid < (V)){ 
+            sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::device, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
+            int old_pipe_size = 0, temp_pipe_value = 0;
+            if(lid == 0){
               temp_pipe_value = total_nnz;
+              shared_size[0] = atomic_op_global.fetch_add(temp_pipe_value);  
             }
-            else{
-              temp_pipe_value = 0;
-            }
-            old_pipe_size = atomic_op_global_clone.fetch_add(temp_pipe_value);
-            // if(lid == 0 || gid == (V -1)) old_pipe_size = atomic_op_global_clone.fetch_add(total_nnz);
+            sycl::group_barrier(item.get_group());
+            old_pipe_size = shared_size[0];
+            sycl::group_barrier(item.get_group());
 
     for (int i = lid;            // threadIdx.x
         i < total_nnz;  // total degree to process
@@ -261,8 +261,7 @@ event parallel_levelgen_kernel(queue &q,
       usm_dist[n] = iteration + 1; 
       usm_visit[n] = 1;
       usm_visit_mask[n] = 0;
-      usm_pipe[old_pipe_size + i] = sedges[id];
-  
+      usm_pipe[old_pipe_size + i ] = sedges[id];
     } 
 
     
@@ -349,6 +348,7 @@ void GPURun(int vertexCount,
     }
 
   // Enables Devs[x] to access Devs[y] memory and vice versa.
+  if (Devs.size() > 1){
   gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID_i) {
     gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID_j) {
         if (gpuID_i != gpuID_j) {
@@ -356,6 +356,7 @@ void GPURun(int vertexCount,
           }
     });
   });
+  }
 
 
     // Compute kernel execution time
@@ -435,7 +436,7 @@ void GPURun(int vertexCount,
     
     double start_time = 0;
     double end_time = 0;
-    for(int iteration=0; iteration < 2; iteration++){
+    for(int iteration=0; iteration < MAX_NUM_LEVELS; iteration++){
       if((h_pipe_count[0]) == 0){
         break;
       }    
@@ -457,9 +458,6 @@ void GPURun(int vertexCount,
 
 
       copyToHost(Queues[0],frontierCountDevice,h_pipe_count);
-
-
-      std::cout << "Pipe Count" << h_pipe_count[0] << std::endl;
      
       Queues[0].wait();
       copybackhostEvent = Queues[0].memcpy(frontierCountDevice, &zero, sizeof(Uint32));
