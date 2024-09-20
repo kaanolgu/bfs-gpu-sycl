@@ -235,8 +235,8 @@ event parallel_levelgen_kernel(queue &q,
 
             // sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::device, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
             sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::device, sycl::access::address_space::global_space> atomic_op_global_clone(usm_pipe_size[0]);
-            int old_pipe_size = 0;
-            if(lid == (THREADS_PER_BLOCK -1) || gid == (V -1)){ old_pipe_size = atomic_op_global_clone.fetch_add(total_nnz);
+            int old_pipe_size;
+            if(lid == 0 || gid == (V -1)){ old_pipe_size = atomic_op_global_clone.fetch_add(total_nnz);
             }else{
                old_pipe_size = atomic_op_global_clone.load();
             }
