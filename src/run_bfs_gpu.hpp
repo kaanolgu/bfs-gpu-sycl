@@ -191,7 +191,6 @@ event parallel_levelgen_kernel(queue &q,
                                 int iteration,
                                 Uint32 *usm_pipe,
                                 Uint32 *usm_pipe_size,
-                                Uint32 *usm_pipe_size_clone,
                                 Uint32* usm_dist
                                  ){
    // Define the work-group size and the number of work-groups
@@ -235,11 +234,14 @@ event parallel_levelgen_kernel(queue &q,
 
             // sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::device, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
             sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::device, sycl::access::address_space::global_space> atomic_op_global_clone(usm_pipe_size[0]);
-            int old_pipe_size;
-            if(lid == 0 || gid == (V -1)){ old_pipe_size = atomic_op_global_clone.fetch_add(total_nnz);
-            }else{
-               old_pipe_size = atomic_op_global_clone.load();
+            int old_pipe_size = 0, temp_pipe_value;
+            if(lid == 0 && gid < (V)){ 
+              temp_pipe_value = total_nnz;
             }
+            else{
+              temp_pipe_value = 0;
+            }
+            old_pipe_size = atomic_op_global_clone.fetch_add(temp_pipe_value);
             // if(lid == 0 || gid == (V -1)) old_pipe_size = atomic_op_global_clone.fetch_add(total_nnz);
 
     for (int i = lid;            // threadIdx.x
@@ -373,13 +375,11 @@ void GPURun(int vertexCount,
     std::vector<MyUint1*> usm_visit(NUM_GPU);
     std::vector<Uint32> h_pipe(vertexCount,0);
     std::vector<Uint32> h_pipe_count(1,1);
-    std::vector<Uint32> h_pipe_count_clone(1,1);
     for(int i =0; i < num_runs; i++){
       // Frontier Start
       
 
       std::fill(h_pipe_count.begin(), h_pipe_count.end(), 1);
-      std::fill(h_pipe_count_clone.begin(), h_pipe_count_clone.end(), 1);
       std::fill(h_pipe.begin(), h_pipe.end(), 0);
       h_pipe[0] = sourceNode;
 
@@ -417,7 +417,7 @@ void GPURun(int vertexCount,
 
     });
     Uint32 *frontierCountDevice = malloc_device<Uint32>(1, Queues[0]);
-    Uint32 *frontierCountDeviceClone = malloc_device<Uint32>(1, Queues[0]);
+
 
 
 
@@ -431,7 +431,7 @@ void GPURun(int vertexCount,
 
 
     Queues[0].memcpy(frontierCountDevice, &zero, sizeof(Uint32));  
-    Queues[0].memcpy(frontierCountDeviceClone, &zero, sizeof(Uint32));  
+ 
     
     double start_time = 0;
     double end_time = 0;
@@ -448,7 +448,7 @@ void GPURun(int vertexCount,
             Queues[gpuID].wait();
       });
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-            levelEvent[gpuID] =parallel_levelgen_kernel<gpuID>(Queues[gpuID],vertexCount,usm_visit_mask[gpuID],usm_visit[gpuID],iteration,usm_pipe_global,frontierCountDevice,frontierCountDeviceClone,DistanceDevice);
+            levelEvent[gpuID] =parallel_levelgen_kernel<gpuID>(Queues[gpuID],vertexCount,usm_visit_mask[gpuID],usm_visit[gpuID],iteration,usm_pipe_global,frontierCountDevice,DistanceDevice);
       });
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
             Queues[gpuID].wait();
@@ -457,13 +457,13 @@ void GPURun(int vertexCount,
 
 
       copyToHost(Queues[0],frontierCountDevice,h_pipe_count);
-      copyToHost(Queues[0],frontierCountDeviceClone,h_pipe_count_clone);
 
-      std::cout << "Pipe Count" << h_pipe_count[0] << ", Clone = " << h_pipe_count_clone[0] << std::endl;
+
+      std::cout << "Pipe Count" << h_pipe_count[0] << std::endl;
      
       Queues[0].wait();
       copybackhostEvent = Queues[0].memcpy(frontierCountDevice, &zero, sizeof(Uint32));
-       Queues[0].memcpy(frontierCountDeviceClone, &zero, sizeof(Uint32));
+
       // Capture execution times 
       // levelDuration     += GetExecutionTime(levelEvent[0]);
       // Increase the level by 1 
