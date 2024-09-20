@@ -232,13 +232,15 @@ event parallel_levelgen_kernel(queue &q,
             Uint32 length = (V < gid - lid + blockDim) ? (V - (gid -lid)) : blockDim;
     
 
-            
+
             Uint32 temp_pipe_value = 0;
-            if(lid == 0){
+            if(lid == 0 && total_nnz > 0){
               sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::device, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
               temp_pipe_value = atomic_op_global.fetch_add(total_nnz);  
+ 
             }
-            Uint32 old_pipe_size = reduce_over_group(item.get_group(), temp_pipe_value, sycl::plus<>());
+            Uint32 old_pipe_size;
+            if(total_nnz > 0) old_pipe_size = reduce_over_group(item.get_group(), temp_pipe_value, sycl::plus<>());
 
             
 
@@ -261,17 +263,6 @@ event parallel_levelgen_kernel(queue &q,
       usm_visit_mask[e] = 0;
       usm_pipe[old_pipe_size + i ] = e;
     } 
-
-    
-    //  if(lid == (THREADS_PER_BLOCK -1) || gid == (V -1)) atomic_op_global_clone.fetch_add(total_nnz);
-      // if (gid == V) {
-      //    usm_pipe_size[0] = local_pipe_size[0];
-      // }
-
-
-
-
-
 
 
 
