@@ -39,7 +39,7 @@ using namespace sycl;
 #include <sycl/sycl.hpp>
 // This function returns a vector of two (not necessarily distinct) devices,
 // allowing computation to be split across said devices.
-#define THREADS_PER_BLOCK 256
+#define THREADS_PER_BLOCK 1024
 
 
 
@@ -210,22 +210,18 @@ event parallel_levelgen_kernel(queue &q,
             const int lid  = item.get_local_id(0); // threadIdx.x
             const int blockDim  = item.get_local_range(0); // blockDim.x
 
-            Uint32 v;
+
             Uint32 local_th_deg; // this variable is shared between workitems
 
 
           if (gid < V) {
-              
-              // v = usm_visit_mask[gid];
               sedges[lid] = gid; // Store in sedges at the correct global index
               local_th_deg = usm_visit_mask[gid]; // Assuming this is how you're calculating degree
           }  else {
               local_th_deg = 0;
           }
 
-            // 2. Exclusive sum of degrees to find total work items per block.
-            Uint32 th_deg = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg, sycl::plus<>());
-            degrees[lid] = th_deg;
+
 
             // 3. Cumulative sum of total number of nonzeros 
             Uint32 total_nnz = reduce_over_group(item.get_group(), local_th_deg, sycl::plus<>());
@@ -234,13 +230,23 @@ event parallel_levelgen_kernel(queue &q,
 
 
             Uint32 temp_pipe_value = 0;
-            if(lid == 0 && total_nnz > 0){
+            Uint32 old_pipe_size;
+            if(lid == 0 && total_nnz > 0 ){
+              // reserve a section in usm_pipe from other GPUs to write only that section
               sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::device, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
               temp_pipe_value = atomic_op_global.fetch_add(total_nnz);  
- 
             }
-            Uint32 old_pipe_size;
-            if(total_nnz > 0) old_pipe_size = reduce_over_group(item.get_group(), temp_pipe_value, sycl::plus<>());
+            
+            // check if in the work-group if we have non-zeros if that work group is all 0's then no need to do extra work
+            // (initial and very last levels)
+            if(total_nnz > 0) {
+
+            // 2. Exclusive sum of degrees to find total work items per block.
+            degrees[lid] = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg, sycl::plus<>());
+
+            // this is same value for all work items so no need to have it in shared local accessor
+            old_pipe_size = reduce_over_group(item.get_group(), temp_pipe_value, sycl::plus<>());
+            }
 
             
 
