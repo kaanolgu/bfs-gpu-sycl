@@ -170,9 +170,9 @@ event parallel_explorer_kernel(queue &q,
       Uint32  e = sedges[id] + i  - degrees[id]; 
       Uint32  n  = usm_edges[e];   
 
-      if(!usm_visit[n]){
+      
         usm_visit_mask[n] = 1;
-      }
+      
     } 
           
       });
@@ -216,7 +216,7 @@ event parallel_levelgen_kernel(queue &q,
 
           if (gid < V) {
               sedges[lid] = gid; // Store in sedges at the correct global index
-              local_th_deg = usm_visit_mask[gid]; // Assuming this is how you're calculating degree
+              local_th_deg = usm_visit_mask[gid]  && !usm_visit[gid]; // Assuming this is how you're calculating degree
           }  else {
               local_th_deg = 0;
           }
@@ -231,7 +231,7 @@ event parallel_levelgen_kernel(queue &q,
 
             Uint32 temp_pipe_value = 0;
             Uint32 old_pipe_size;
-            if(lid == 0 && total_nnz > 0 ){
+            if(lid == 0 && total_nnz > 0){
               // reserve a section in usm_pipe from other GPUs to write only that section
               sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::device, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
               temp_pipe_value = atomic_op_global.fetch_add(total_nnz);  
@@ -263,11 +263,11 @@ event parallel_levelgen_kernel(queue &q,
       Uint32 it = upper_bound(degrees,length, i);
       Uint32 id =  it - 1;
       Uint32  e = sedges[id] + i  - degrees[id]; 
-
+  
       usm_dist[e] = iteration + 1; 
       usm_visit[e] = 1;
-      usm_visit_mask[e] = 0;
       usm_pipe[old_pipe_size + i ] = e;
+
     } 
 
 
