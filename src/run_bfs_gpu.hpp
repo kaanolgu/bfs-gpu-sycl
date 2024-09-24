@@ -229,14 +229,14 @@ event parallel_levelgen_kernel(queue &q,
             const int gid = item.get_global_id(0);    // global id
             const int lid  = item.get_local_id(0); // threadIdx.x
             const int blockDim  = item.get_local_range(0); // blockDim.x
-            const int gidX = item.get_global_id(0) + Vstart;    // global id
+            // const int gidX = item.get_global_id(0) + Vstart;    // global id
 
             Uint32 local_th_deg; // this variable is shared between workitems
-
+      
 
           if (gid < Vsize) {
-              sedges[lid] = gidX; // Store in sedges at the correct global index
-              local_th_deg = usm_visit_mask[gidX]  && !usm_visit[gidX]; // Assuming this is how you're calculating degree
+              sedges[lid] =  gid + Vstart; // Store in sedges at the correct global index
+              local_th_deg = usm_visit_mask[ gid + Vstart]  && !usm_visit[ gid + Vstart]; // Assuming this is how you're calculating degree
           }  else {
               local_th_deg = 0;
           }
