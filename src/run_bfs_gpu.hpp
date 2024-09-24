@@ -149,10 +149,6 @@ event parallel_explorer_kernel(queue &q,
             const int lid  = item.get_local_id(0); // threadIdx.x
             const int blockDim  = item.get_local_range(0); // blockDim.x
 
-
-            device_ptr<Uint32> DevicePtr_start(usm_nodes_start);  
-            device_ptr<Uint32> DevicePtr_end(usm_nodes_start + 1);  
-
             Uint32 v;
             Uint32 local_th_deg; // this variable is shared between workitems
           // this variable will be instantiated for each work-item separately
@@ -161,8 +157,8 @@ event parallel_explorer_kernel(queue &q,
           if (gid < V) {
               
               v = usm_pipe_1[gid];
-              sedges[lid] = DevicePtr_start[v]; // Store in sedges at the correct global index
-              local_th_deg = DevicePtr_end[v] - DevicePtr_start[v]; // Assuming this is how you're calculating degree
+              sedges[lid] = usm_nodes_start[v]; // Store in sedges at the correct global index
+              local_th_deg = usm_nodes_start[v+1] - usm_nodes_start[v]; // Assuming this is how you're calculating degree
           }  else {
               local_th_deg = 0;
           }
