@@ -89,6 +89,11 @@ int main(int argc, char * argv[])
   std::cout << "######################LOADING MATRIX#########################" << std::endl;
   CSRGraph graph = loadMatrix(NUM_GPU,datasetName);
 
+for(int i =0; i < graph.meta.size(); i++){
+    std::cout << "graph.meta[" << i << "] = " << graph.meta[i] << std::endl;
+}
+
+
 
 
   CSRGraph graph_cpu = loadMatrix(1,datasetName);
@@ -110,7 +115,19 @@ int main(int argc, char * argv[])
 
   h_dist[start_vertex]=0; 
   h_graph_visited[start_vertex]=1;
+
+
+//   std::vector<std::vector<MyUint1>> h_visit_mask(NUM_GPU);
+//   h_visit_mask[0].resize(529448,0);
+//   h_visit_mask[1].resize(1090184- 529448,0);
+//   h_visit_mask[2].resize(2074257 - 1090184,0);
+//   std::vector<std::vector<MyUint1>> h_visit(NUM_GPU);
+//   h_visit[0].resize(529448,0);
+//   h_visit[1].resize(1090184- 529448,0);
+//   h_visit[2].resize(2074257 - 1090184,0);
+//   h_visit[0][start_vertex]=1;
   
+
   if(NUM_GPU > 1){
     GPURun(numRows,graph.indsMulti,graph.indptrMulti,h_updating_graph_mask,h_graph_visited,h_dist,start_vertex,num_runs,newJsonObj);  
   }else{
