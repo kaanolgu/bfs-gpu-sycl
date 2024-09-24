@@ -168,15 +168,16 @@ event parallel_explorer_kernel(queue &q,
           }
             // sycl::group_barrier(item.get_group());
 
-            // 2. Exclusive sum of degrees to find total work items per block.
-            Uint32 th_deg = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg, sycl::plus<>());
-            degrees[lid] = th_deg;
+
             // sycl::group_barrier(item.get_group());
 
             // 3. Cumulative sum of total number of nonzeros 
             Uint32 total_nnz = reduce_over_group(item.get_group(), local_th_deg, sycl::plus<>());
             Uint32 length = (V < gid - lid + blockDim) ? (V - (gid -lid)) : blockDim;
-      
+      if(total_nnz > 0){
+                    // 2. Exclusive sum of degrees to find total work items per block.
+            degrees[lid] = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg, sycl::plus<>());
+      }
 
     for (int i = lid;            // threadIdx.x
         i < total_nnz;  // total degree to process
