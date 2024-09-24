@@ -123,7 +123,6 @@ class LevelGen;
 
 template <int krnl_id>
 event parallel_explorer_kernel(queue &q,
-                                const Uint32 Vstart,
                                 const Uint32 V,
                                 Uint32 iteration,
                                 Uint32* usm_nodes_start,
@@ -209,11 +208,11 @@ event parallel_explorer_kernel(queue &q,
 
 template <int krnl_id>
 event parallel_levelgen_kernel(queue &q,
-                                int Vstart,
-                                int Vsize,
+                                const Uint32 Vstart,
+                                const Uint32 Vsize,
                                 MyUint1 *usm_visit_mask,
                                 MyUint1 *usm_visit,
-                                int iteration,
+                                const int iteration,
                                 Uint32 *usm_pipe,
                                 Uint32 *usm_pipe_size,
                                 Uint32* usm_dist
@@ -333,7 +332,7 @@ void GPURun(int vertexCount,
                   std::vector<MyUint1> &h_visit,
                   std::vector<Uint32> &DistanceHost,
                   int sourceNode,const int num_runs,
-                  nlohmann::json &newJsonObj) noexcept(false) {
+                  nlohmann::json &newJsonObj,std::vector<Uint32> &test) noexcept(false) {
 
   try {
 
@@ -377,11 +376,11 @@ void GPURun(int vertexCount,
   });
   }
 
-    std::vector<int> test(4); 
-    test[0] = 0;
-    test[1] = 529448;
-    test[2] = 1090184;
-    test[3] = 2074257;
+    // std::vector<int> test(4); 
+    // test[0] = 0;
+    // test[1] = 529448;
+    // test[2] = 1090184;
+    // test[3] = 2074257;
 
 
   // std::vector<std::vector<MyUint1>> h_visit_mask(NUM_GPU);
@@ -479,7 +478,7 @@ void GPURun(int vertexCount,
        
 
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-              exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],test[gpuID],h_pipe_count[0],iteration,OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, usm_visit_mask[gpuID]);
+              exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],iteration,OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, usm_visit_mask[gpuID]);
       });
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
             Queues[gpuID].wait();

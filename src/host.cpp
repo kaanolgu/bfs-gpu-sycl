@@ -115,7 +115,21 @@ for(int i =0; i < graph.meta.size(); i++){
 
   h_dist[start_vertex]=0; 
   h_graph_visited[start_vertex]=1;
+   std::vector<Uint32>  h_visit_offsets(NUM_GPU+1,0);
 
+
+    std::vector<int> selected = {0}; // Start with 0
+    // Select elements at indices that are multiples of 4
+    for (size_t i = 0; i < graph.meta.size(); i += 4) {
+        selected.push_back(graph.meta[i]);
+    }
+
+    
+    // Compute partial sum and store the result, starting from position 1
+    std::partial_sum(selected.begin(), selected.end(), h_visit_offsets.begin());
+
+        for(int i = 0; i < h_visit_offsets.size(); i++)
+    std::cout << "test[" << i << "]: "<< h_visit_offsets[i] << std::endl;
 
 //   std::vector<std::vector<MyUint1>> h_visit_mask(NUM_GPU);
 //   h_visit_mask[0].resize(529448,0);
@@ -129,9 +143,9 @@ for(int i =0; i < graph.meta.size(); i++){
   
 
   if(NUM_GPU > 1){
-    GPURun(numRows,graph.indsMulti,graph.indptrMulti,h_updating_graph_mask,h_graph_visited,h_dist,start_vertex,num_runs,newJsonObj);  
+    GPURun(numRows,graph.indsMulti,graph.indptrMulti,h_updating_graph_mask,h_graph_visited,h_dist,start_vertex,num_runs,newJsonObj,h_visit_offsets);  
   }else{
-    GPURun(numRows,graph.inds,graph.indptr,h_updating_graph_mask,h_graph_visited,h_dist,start_vertex,num_runs,newJsonObj); 
+    GPURun(numRows,graph.inds,graph.indptr,h_updating_graph_mask,h_graph_visited,h_dist,start_vertex,num_runs,newJsonObj,h_visit_offsets); 
   }
 
   
