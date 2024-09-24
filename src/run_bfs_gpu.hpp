@@ -42,7 +42,31 @@ using namespace sycl;
 #define THREADS_PER_BLOCK 1024
 
 
+// Function to find the first and last non-zero indices in a vector, ignoring the specified start index
+template <typename T>
+std::pair<std::optional<size_t>, std::optional<size_t>> find_first_last_nonzero(
+    const std::vector<T>& arr, size_t ignore_index = std::numeric_limits<size_t>::max()) {
+    std::optional<size_t> first_nonzero;
+    std::optional<size_t> last_nonzero;
 
+    // Traverse the array to find the first and last non-zero indices
+    for (size_t i = 0; i < arr.size(); ++i) {
+        // Skip the specified index to be ignored
+        if (i == ignore_index) {
+            continue;
+        }
+
+        // Check if the current element is non-zero
+        if (arr[i] != 0) {
+            if (!first_nonzero.has_value()) {
+                first_nonzero = i;  // Set the first non-zero index
+            }
+            last_nonzero = i;  // Continuously update the last non-zero index
+        }
+    }
+
+    return {first_nonzero, last_nonzero};
+}
 // initialize device arr with val, if needed set arr[pos] = pos_val
 template <typename T>
 void copyToDevice(queue &Q, std::vector<T> &arr, T *usm_arr, size_t offset = 0) {
@@ -99,13 +123,13 @@ class LevelGen;
 
 template <int krnl_id>
 event parallel_explorer_kernel(queue &q,
+                                const Uint32 Vstart,
                                 const Uint32 V,
                                 Uint32 iteration,
                                 Uint32* usm_nodes_start,
                                 Uint32 *usm_edges,
                                 Uint32* usm_pipe_1,
-                                MyUint1 *usm_visit_mask,
-                                MyUint1 *usm_visit)
+                                MyUint1 *usm_visit_mask)
     {
 
 
@@ -185,7 +209,8 @@ event parallel_explorer_kernel(queue &q,
 
 template <int krnl_id>
 event parallel_levelgen_kernel(queue &q,
-                                int V,
+                                int Vstart,
+                                int Vsize,
                                 MyUint1 *usm_visit_mask,
                                 MyUint1 *usm_visit,
                                 int iteration,
@@ -195,8 +220,7 @@ event parallel_levelgen_kernel(queue &q,
                                  ){
    // Define the work-group size and the number of work-groups
     const size_t local_size = THREADS_PER_BLOCK;  // Number of work-items per work-group
-    const size_t global_size = ((V + local_size - 1) / local_size) * local_size;
-
+    const size_t global_size = ((Vsize + local_size - 1) / local_size) * local_size;
 
     // Setup the range
     nd_range<1> range(global_size, local_size);
@@ -209,14 +233,14 @@ event parallel_levelgen_kernel(queue &q,
             const int gid = item.get_global_id(0);    // global id
             const int lid  = item.get_local_id(0); // threadIdx.x
             const int blockDim  = item.get_local_range(0); // blockDim.x
-
+            const int gidX = item.get_global_id(0) + Vstart;    // global id
 
             Uint32 local_th_deg; // this variable is shared between workitems
 
 
-          if (gid < V) {
-              sedges[lid] = gid; // Store in sedges at the correct global index
-              local_th_deg = usm_visit_mask[gid]  && !usm_visit[gid]; // Assuming this is how you're calculating degree
+          if (gid < Vsize) {
+              sedges[lid] = gidX; // Store in sedges at the correct global index
+              local_th_deg = usm_visit_mask[gidX]  && !usm_visit[gidX]; // Assuming this is how you're calculating degree
           }  else {
               local_th_deg = 0;
           }
@@ -225,7 +249,7 @@ event parallel_levelgen_kernel(queue &q,
 
             // 3. Cumulative sum of total number of nonzeros 
             Uint32 total_nnz = reduce_over_group(item.get_group(), local_th_deg, sycl::plus<>());
-            Uint32 length = (V < gid - lid + blockDim) ? (V - (gid -lid)) : blockDim;
+            Uint32 length = (Vsize < gid - lid + blockDim) ? (Vsize - (gid -lid)) : blockDim;
     
 
 
@@ -239,14 +263,14 @@ event parallel_levelgen_kernel(queue &q,
             
             // check if in the work-group if we have non-zeros if that work group is all 0's then no need to do extra work
             // (initial and very last levels)
-            if(total_nnz > 0) {
+          
 
             // 2. Exclusive sum of degrees to find total work items per block.
             degrees[lid] = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg, sycl::plus<>());
 
             // this is same value for all work items so no need to have it in shared local accessor
             old_pipe_size = reduce_over_group(item.get_group(), temp_pipe_value, sycl::plus<>());
-            }
+            
 
             
 
@@ -309,7 +333,7 @@ void GPURun(int vertexCount,
                   std::vector<MyUint1> &h_visit,
                   std::vector<Uint32> &DistanceHost,
                   int sourceNode,const int num_runs,
-                  nlohmann::json &newJsonObj) noexcept(false) {
+                  nlohmann::json &newJsonObj,int colsCount) noexcept(false) {
 
   try {
 
@@ -353,6 +377,22 @@ void GPURun(int vertexCount,
   });
   }
 
+    std::vector<int> test(4); 
+    test[0] = 0;
+    test[1] = 529448;
+    test[2] = 1090184;
+    test[3] = 2074257;
+
+
+  // std::vector<std::vector<MyUint1>> h_visit_mask(NUM_GPU);
+  // h_visit_mask[0].resize(529448,0);
+  // h_visit_mask[1].resize(1090184- 529448,0);
+  // h_visit_mask[2].resize(2074257 - 1090184,0);
+  // std::vector<std::vector<MyUint1>> h_visit(NUM_GPU);
+  // h_visit[0].resize(529448,0);
+  // h_visit[1].resize(1090184- 529448,0);
+  // h_visit[2].resize(2074257 - 1090184,0);
+  // h_visit[0][sourceNode]=1;
 
     // Compute kernel execution time
     std::vector<sycl::event> levelEvent(NUM_GPU);
@@ -360,7 +400,8 @@ void GPURun(int vertexCount,
     sycl::event copybackhostEvent;
     // double levelDuration=0;
 
-
+  std::vector<MyUint1> h_visit0(colsCount,0); 
+  std::vector<MyUint1> h_visit1(colsCount,0); 
 
     std::vector<std::vector<Uint32>> distances(num_runs,DistanceHost);
     std::vector<double> run_times(num_runs,0);
@@ -438,13 +479,13 @@ void GPURun(int vertexCount,
        
 
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-              exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],iteration,OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, usm_visit_mask[gpuID],usm_visit[gpuID]);
+              exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],test[gpuID],h_pipe_count[0],iteration,OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, usm_visit_mask[gpuID]);
       });
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
             Queues[gpuID].wait();
       });
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-            levelEvent[gpuID] =parallel_levelgen_kernel<gpuID>(Queues[gpuID],vertexCount,usm_visit_mask[gpuID],usm_visit[gpuID],iteration,usm_pipe_global,frontierCountDevice,DistanceDevice);
+            levelEvent[gpuID] =parallel_levelgen_kernel<gpuID>(Queues[gpuID],test[gpuID],test[gpuID+1] - test[gpuID],usm_visit_mask[gpuID],usm_visit[gpuID],iteration,usm_pipe_global,frontierCountDevice,DistanceDevice);
       });
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
             Queues[gpuID].wait();
@@ -453,7 +494,12 @@ void GPURun(int vertexCount,
 
 
       copyToHost(Queues[0],frontierCountDevice,h_pipe_count);
+      // copyToHost(Queues[0],usm_visit[0],h_visit0);
+      // copyToHost(Queues[1],usm_visit[1],h_visit1);
      
+      // gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
+            // Queues[gpuID].wait();
+      // });
       Queues[0].wait();
       copybackhostEvent = Queues[0].memcpy(frontierCountDevice, &zero, sizeof(Uint32));
 
@@ -486,6 +532,32 @@ void GPURun(int vertexCount,
 
     } // for loop num_runs
 
+
+    // Find the first and last non-zero indices
+     size_t ignore_index = sourceNode; // Change this to the index you want to ignore
+    // Find the first and last non-zero indices, ignoring the specified index
+    auto [first_index, last_index] = find_first_last_nonzero(h_visit0, ignore_index);
+
+    // Display results
+    if (first_index.has_value() && last_index.has_value()) {
+        std::cout << "First non-zero index (ignoring index " << ignore_index << "): " << *first_index << "\n";
+        std::cout << "Last non-zero index: " << *last_index << "\n";
+    } else {
+        std::cout << "No non-zero values found in the array.\n";
+    }
+ 
+     // Find the first and last non-zero indices
+
+    // Find the first and last non-zero indices, ignoring the specified index
+    auto [first_index1, last_index1] = find_first_last_nonzero(h_visit1, ignore_index);
+
+    // Display results
+    if (first_index1.has_value() && last_index1.has_value()) {
+        std::cout << "First non-zero index (ignoring index " << ignore_index << "): " << *first_index1 << "\n";
+        std::cout << "Last non-zero index: " << *last_index1 << "\n";
+    } else {
+        std::cout << "No non-zero values found in the array.\n";
+    }
 
     DistanceHost = distances[num_runs-1];
     // Check if each distances[i] is equal to DistanceHost
