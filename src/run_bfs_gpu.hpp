@@ -195,7 +195,7 @@ event parallel_explorer_kernel(queue &q,
       Uint32  n  = usm_edges[e];   
 
       
-        usm_visit_mask[n] = 1;
+        usm_visit_mask[n - Vstart] = 1;
       
     } 
           
@@ -227,20 +227,21 @@ event parallel_levelgen_kernel(queue &q,
         auto e = q.submit([&](handler& h) {
             // Local memory for exclusive sum, shared within the work-group
             sycl::local_accessor<Uint32> sedges(local_size, h);
+            sycl::local_accessor<Uint32> sedgesX(local_size, h);
             sycl::local_accessor<Uint32> degrees(local_size, h);
 
         h.parallel_for<class LevelGen<krnl_id>>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
             const int gid = item.get_global_id(0);    // global id
             const int lid  = item.get_local_id(0); // threadIdx.x
             const int blockDim  = item.get_local_range(0); // blockDim.x
-            const int gidX = item.get_global_id(0) + Vstart;    // global id
 
             Uint32 local_th_deg; // this variable is shared between workitems
 
 
           if (gid < Vsize) {
-              sedges[lid] = gidX; // Store in sedges at the correct global index
-              local_th_deg = usm_visit_mask[gidX]  && !usm_visit[gidX]; // Assuming this is how you're calculating degree
+              sedges[lid] = gid; // Store in sedges at the correct global index
+              sedgesX[lid] = gid + Vstart; // Store in sedges at the correct global index
+              local_th_deg = usm_visit_mask[gid]  && !usm_visit[gid]; // Assuming this is how you're calculating degree
           }  else {
               local_th_deg = 0;
           }
@@ -263,14 +264,14 @@ event parallel_levelgen_kernel(queue &q,
             
             // check if in the work-group if we have non-zeros if that work group is all 0's then no need to do extra work
             // (initial and very last levels)
-          
+          if(total_nnz > 0){
 
             // 2. Exclusive sum of degrees to find total work items per block.
             degrees[lid] = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg, sycl::plus<>());
 
             // this is same value for all work items so no need to have it in shared local accessor
             old_pipe_size = reduce_over_group(item.get_group(), temp_pipe_value, sycl::plus<>());
-            
+          }
 
             
 
@@ -286,10 +287,11 @@ event parallel_levelgen_kernel(queue &q,
     
       Uint32 it = upper_bound(degrees,length, i);
       Uint32 id =  it - 1;
-      Uint32  e = sedges[id] + i  - degrees[id]; 
+      Uint32  e = sedgesX[id] + i  - degrees[id];
+ 
   
       usm_dist[e] = iteration + 1; 
-      usm_visit[e] = 1;
+      usm_visit[sedges[id]] = 1;
       usm_pipe[old_pipe_size + i ] = e;
 
     } 
@@ -329,11 +331,11 @@ template<typename vectorT>
 void GPURun(int vertexCount, 
                   vectorT &IndexHost,
                   vectorT &OffsetHost,
-                  std::vector<MyUint1> &h_visit_mask,
-                  std::vector<MyUint1> &h_visit,
+                  std::vector<std::vector<MyUint1>> &h_visit_mask,
+                  std::vector<std::vector<MyUint1>> &h_visit,
                   std::vector<Uint32> &DistanceHost,
                   int sourceNode,const int num_runs,
-                  nlohmann::json &newJsonObj,int colsCount) noexcept(false) {
+                  nlohmann::json &newJsonObj) noexcept(false) {
 
   try {
 
@@ -400,12 +402,13 @@ void GPURun(int vertexCount,
     sycl::event copybackhostEvent;
     // double levelDuration=0;
 
-  std::vector<MyUint1> h_visit0(colsCount,0); 
-  std::vector<MyUint1> h_visit1(colsCount,0); 
+  // std::vector<MyUint1> h_visit0(colsCount,0); 
+  // std::vector<MyUint1> h_visit1(colsCount,0); 
 
     std::vector<std::vector<Uint32>> distances(num_runs,DistanceHost);
     std::vector<double> run_times(num_runs,0);
     int zero = 0;
+
     std::vector<Uint32*> OffsetDevice(NUM_GPU);
     std::vector<Uint32*> EdgesDevice(NUM_GPU);
     std::vector<MyUint1*> usm_visit_mask(NUM_GPU);
@@ -434,11 +437,13 @@ void GPURun(int vertexCount,
           offsetSize = OffsetHost[gpuID].size();
           indexSize = IndexHost[gpuID].size();
       }
+      size_t maskSize = h_visit_mask[gpuID].size();
+      size_t visitSize = h_visit[gpuID].size();
 
       OffsetDevice[gpuID]        = malloc_device<Uint32>(offsetSize, Queues[gpuID]);
       EdgesDevice[gpuID]     = malloc_device<Uint32>(indexSize, Queues[gpuID]); 
-      usm_visit_mask[gpuID]    = malloc_device<MyUint1>(h_visit_mask.size(), Queues[gpuID]); 
-      usm_visit[gpuID]    = malloc_device<MyUint1>(h_visit.size(), Queues[gpuID]); 
+      usm_visit_mask[gpuID]    = malloc_device<MyUint1>(maskSize, Queues[gpuID]); 
+      usm_visit[gpuID]    = malloc_device<MyUint1>(visitSize, Queues[gpuID]); 
 
 
       if constexpr (std::is_same_v<vectorT, std::vector<Uint32>>) {
@@ -449,8 +454,8 @@ void GPURun(int vertexCount,
           copyToDevice(Queues[gpuID],OffsetHost[gpuID],OffsetDevice[gpuID]);
       }
   
-      copyToDevice(Queues[gpuID],h_visit_mask,usm_visit_mask[gpuID]);
-      copyToDevice(Queues[gpuID],h_visit,usm_visit[gpuID]);
+      copyToDevice(Queues[gpuID],h_visit_mask[gpuID],usm_visit_mask[gpuID]);
+      copyToDevice(Queues[gpuID],h_visit[gpuID],usm_visit[gpuID]);
 
     });
     Uint32 *frontierCountDevice = malloc_device<Uint32>(1, Queues[0]);
@@ -533,31 +538,31 @@ void GPURun(int vertexCount,
     } // for loop num_runs
 
 
-    // Find the first and last non-zero indices
-     size_t ignore_index = sourceNode; // Change this to the index you want to ignore
-    // Find the first and last non-zero indices, ignoring the specified index
-    auto [first_index, last_index] = find_first_last_nonzero(h_visit0, ignore_index);
+    // // Find the first and last non-zero indices
+    //  size_t ignore_index = sourceNode; // Change this to the index you want to ignore
+    // // Find the first and last non-zero indices, ignoring the specified index
+    // auto [first_index, last_index] = find_first_last_nonzero(h_visit0, ignore_index);
 
-    // Display results
-    if (first_index.has_value() && last_index.has_value()) {
-        std::cout << "First non-zero index (ignoring index " << ignore_index << "): " << *first_index << "\n";
-        std::cout << "Last non-zero index: " << *last_index << "\n";
-    } else {
-        std::cout << "No non-zero values found in the array.\n";
-    }
+    // // Display results
+    // if (first_index.has_value() && last_index.has_value()) {
+    //     std::cout << "First non-zero index (ignoring index " << ignore_index << "): " << *first_index << "\n";
+    //     std::cout << "Last non-zero index: " << *last_index << "\n";
+    // } else {
+    //     std::cout << "No non-zero values found in the array.\n";
+    // }
  
-     // Find the first and last non-zero indices
+    //  // Find the first and last non-zero indices
 
-    // Find the first and last non-zero indices, ignoring the specified index
-    auto [first_index1, last_index1] = find_first_last_nonzero(h_visit1, ignore_index);
+    // // Find the first and last non-zero indices, ignoring the specified index
+    // auto [first_index1, last_index1] = find_first_last_nonzero(h_visit1, ignore_index);
 
-    // Display results
-    if (first_index1.has_value() && last_index1.has_value()) {
-        std::cout << "First non-zero index (ignoring index " << ignore_index << "): " << *first_index1 << "\n";
-        std::cout << "Last non-zero index: " << *last_index1 << "\n";
-    } else {
-        std::cout << "No non-zero values found in the array.\n";
-    }
+    // // Display results
+    // if (first_index1.has_value() && last_index1.has_value()) {
+    //     std::cout << "First non-zero index (ignoring index " << ignore_index << "): " << *first_index1 << "\n";
+    //     std::cout << "Last non-zero index: " << *last_index1 << "\n";
+    // } else {
+    //     std::cout << "No non-zero values found in the array.\n";
+    // }
 
     DistanceHost = distances[num_runs-1];
     // Check if each distances[i] is equal to DistanceHost
