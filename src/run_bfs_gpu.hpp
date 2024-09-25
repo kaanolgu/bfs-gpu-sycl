@@ -233,62 +233,70 @@ event parallel_levelgen_kernel(queue &q,
 
             Uint32 local_th_deg; // this variable is shared between workitems
       
-
           if (gid < Vsize) {
-              sedges[lid] =  gid + Vstart; // Store in sedges at the correct global index
-              local_th_deg = usm_visit_mask[ gid + Vstart]  && !usm_visit[ gid + Vstart]; // Assuming this is how you're calculating degree
-          }  else {
-              local_th_deg = 0;
+              MyUint1 vmask = usm_visit_mask[gid + Vstart] && !usm_visit[ gid + Vstart];
+              if(vmask == 1){
+                usm_dist[gid + Vstart] = iteration + 1;  
+                usm_visit[gid + Vstart] = 1;
+                sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::device, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
+                usm_pipe[atomic_op_global.fetch_add(1)] = gid + Vstart;
+              }
           }
+    //       if (gid < Vsize) {
+    //           sedges[lid] =  gid + Vstart; // Store in sedges at the correct global index
+    //           local_th_deg = usm_visit_mask[ gid + Vstart]  && !usm_visit[ gid + Vstart]; // Assuming this is how you're calculating degree
+    //       }  else {
+    //           local_th_deg = 0;
+    //       }
 
 
 
-            // 3. Cumulative sum of total number of nonzeros 
-            Uint32 total_nnz = reduce_over_group(item.get_group(), local_th_deg, sycl::plus<>());
-            Uint32 length = (Vsize < gid - lid + blockDim) ? (Vsize - (gid -lid)) : blockDim;
+    //         // 3. Cumulative sum of total number of nonzeros 
+    //         Uint32 total_nnz = reduce_over_group(item.get_group(), local_th_deg, sycl::plus<>());
+    //         Uint32 length = (Vsize < gid - lid + blockDim) ? (Vsize - (gid -lid)) : blockDim;
     
 
 
-            Uint32 temp_pipe_value = 0;
-            Uint32 old_pipe_size;
-            if(lid == 0 && total_nnz > 0){
-              // reserve a section in usm_pipe from other GPUs to write only that section
-              sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::device, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
-              temp_pipe_value = atomic_op_global.fetch_add(total_nnz);  
-            }
+    //         Uint32 temp_pipe_value = 0;
+    //         Uint32 old_pipe_size;
+    //         if(lid == 0 && total_nnz > 0){
+    //           // reserve a section in usm_pipe from other GPUs to write only that section
+    //           sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::device, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
+    //           temp_pipe_value = atomic_op_global.fetch_add(total_nnz);  
+    //         }
             
-            // check if in the work-group if we have non-zeros if that work group is all 0's then no need to do extra work
-            // (initial and very last levels)
-          if(total_nnz > 0){
+    //         // check if in the work-group if we have non-zeros if that work group is all 0's then no need to do extra work
+    //         // (initial and very last levels)
+    //       if(total_nnz > 0){
 
-            // 2. Exclusive sum of degrees to find total work items per block.
-            degrees[lid] = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg, sycl::plus<>());
+    //         // 2. Exclusive sum of degrees to find total work items per block.
+    //         degrees[lid] = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg, sycl::plus<>());
 
-            // this is same value for all work items so no need to have it in shared local accessor
-            old_pipe_size = reduce_over_group(item.get_group(), temp_pipe_value, sycl::plus<>());
-          }
+    //         // this is same value for all work items so no need to have it in shared local accessor
+    //         old_pipe_size = reduce_over_group(item.get_group(), temp_pipe_value, sycl::plus<>());
+    //       }
 
             
 
-    for (int i = lid;            // threadIdx.x
-        i < total_nnz;  // total degree to process
-        i += blockDim    // increment by blockDim.x
-    ) {
+    // for (int i = lid;            // threadIdx.x
+    //     i < total_nnz;  // total degree to process
+    //     i += blockDim    // increment by blockDim.x
+    // ) {
 
-    /// 4. Compute. Using binary search, find the source vertex each thread is
-    /// processing, and the corresponding edge, neighbor and weight tuple. Passed
-    /// to the user-defined lambda operator to process. If there's an output, the
-    /// resultant neighbor or invalid vertex is written to the output frontier.
+    // /// 4. Compute. Using binary search, find the source vertex each thread is
+    // /// processing, and the corresponding edge, neighbor and weight tuple. Passed
+    // /// to the user-defined lambda operator to process. If there's an output, the
+    // /// resultant neighbor or invalid vertex is written to the output frontier.
     
-      Uint32 it = upper_bound(degrees,length, i);
-      Uint32 id =  it - 1;
-      Uint32  e = sedges[id] + i  - degrees[id]; 
+    //   Uint32 it = upper_bound(degrees,length, i);
+    //   Uint32 id =  it - 1;
+    //   Uint32  e = sedges[id] + i  - degrees[id]; 
   
-      usm_dist[e] = iteration + 1; 
-      usm_visit[e] = 1;
-      usm_pipe[old_pipe_size + i ] = e;
+    //   usm_dist[e] = iteration + 1; 
+    //   usm_visit[e] = 1;
+    //   usm_pipe[old_pipe_size + i ] = e;
 
-    } 
+    // } 
 
 
 
