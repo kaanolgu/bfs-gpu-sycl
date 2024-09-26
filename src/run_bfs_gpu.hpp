@@ -11,6 +11,7 @@ using namespace sycl;
 #include "unrolled_loop.hpp"
 #define MAX_NUM_LEVELS 100
 
+
 // |  Memory Model Equivalence
 // |  CUDA                 SYCL
 // +------------------------------------+
@@ -40,6 +41,46 @@ using namespace sycl;
 // This function returns a vector of two (not necessarily distinct) devices,
 // allowing computation to be split across said devices.
 #define THREADS_PER_BLOCK 1024
+
+void printExecutionTimes(const std::vector<double>& execution_timesA, const std::vector<double>& execution_timesB) {
+    const int NUM_TIMES = execution_timesA.size();
+    const int columnWidth = 20;  // Adjusted to fit values and percentages
+
+    // Calculate the grand total (sum of all elements in A and B)
+    double grandTotal = std::accumulate(execution_timesA.begin(), execution_timesA.end(), 0.0)
+                      + std::accumulate(execution_timesB.begin(), execution_timesB.end(), 0.0);
+
+    // Print header
+    std::cout << std::setw(10) << "GPU ID"
+              << std::setw(columnWidth) << "ExploreNeighbours [ms] ( % )"
+              << std::setw(columnWidth) << "Levelgen [ms] ( % )"
+              << std::setw(columnWidth) << "Row Total ( % )" << std::endl;
+
+    std::cout << std::string(10 + columnWidth * 3, '-') << std::endl;
+
+    // Calculate sum of all row totals
+    double rowGrandTotal = 0.0;
+    for (int i = 0; i < NUM_TIMES; ++i) {
+        rowGrandTotal += execution_timesA[i] + execution_timesB[i];
+    }
+
+    // Print each row
+    for (int i = 0; i < NUM_TIMES; ++i) {
+        double rowTotal = execution_timesA[i] + execution_timesB[i];
+        double percentageA = (execution_timesA[i] / grandTotal) * 100;
+        double percentageB = (execution_timesB[i] / grandTotal) * 100;
+        double percentageRow = (rowTotal / rowGrandTotal) * 100;
+
+        std::cout << std::setw(10) << i + 1
+                  << std::setw(columnWidth) << std::fixed << std::setprecision(6)
+                  << execution_timesA[i] << " (" << std::setprecision(2) << percentageA << "%)"
+                  << std::setw(columnWidth) << std::fixed << std::setprecision(6)
+                  << execution_timesB[i] << " (" << std::setprecision(2) << percentageB << "%)"
+                  << std::setw(columnWidth) << std::fixed << std::setprecision(6)
+                  << rowTotal << " (" << std::setprecision(2) << percentageRow << "%)" << std::endl;
+    }
+}
+
 
 
 // Function to find the first and last non-zero indices in a vector, ignoring the specified start index
@@ -337,7 +378,7 @@ void GPURun(int vertexCount,
                   std::vector<MyUint1> &h_visit,
                   std::vector<Uint32> &DistanceHost,
                   int sourceNode,const int num_runs,
-                  nlohmann::json &newJsonObj,std::vector<Uint32> &test) noexcept(false) {
+                  nlohmann::json &newJsonObj,std::vector<Uint32> &h_visit_offsets) noexcept(false) {
 
   try {
 
@@ -381,27 +422,15 @@ void GPURun(int vertexCount,
   });
   }
 
-    // std::vector<int> test(4); 
-    // test[0] = 0;
-    // test[1] = 529448;
-    // test[2] = 1090184;
-    // test[3] = 2074257;
 
 
-  // std::vector<std::vector<MyUint1>> h_visit_mask(NUM_GPU);
-  // h_visit_mask[0].resize(529448,0);
-  // h_visit_mask[1].resize(1090184- 529448,0);
-  // h_visit_mask[2].resize(2074257 - 1090184,0);
-  // std::vector<std::vector<MyUint1>> h_visit(NUM_GPU);
-  // h_visit[0].resize(529448,0);
-  // h_visit[1].resize(1090184- 529448,0);
-  // h_visit[2].resize(2074257 - 1090184,0);
-  // h_visit[0][sourceNode]=1;
 
     // Compute kernel execution time
     std::vector<sycl::event> levelEvent(NUM_GPU);
     std::vector<sycl::event> exploreEvent(NUM_GPU);
     sycl::event copybackhostEvent;
+    std::vector<double> explore_times(NUM_GPU,0);
+    std::vector<double> levelgen_times(NUM_GPU,0);
     // double levelDuration=0;
 
   // std::vector<MyUint1> h_visit0(colsCount,0); 
@@ -489,7 +518,7 @@ void GPURun(int vertexCount,
             Queues[gpuID].wait();
       });
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-            levelEvent[gpuID] =parallel_levelgen_kernel<gpuID>(Queues[gpuID],test[gpuID],test[gpuID+1] - test[gpuID],usm_visit_mask[gpuID],usm_visit[gpuID],iteration,usm_pipe_global,frontierCountDevice,DistanceDevice);
+            levelEvent[gpuID] =parallel_levelgen_kernel<gpuID>(Queues[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID],usm_visit_mask[gpuID],usm_visit[gpuID],iteration,usm_pipe_global,frontierCountDevice,DistanceDevice);
       });
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
             Queues[gpuID].wait();
@@ -508,8 +537,13 @@ void GPURun(int vertexCount,
       copybackhostEvent = Queues[0].memcpy(frontierCountDevice, &zero, sizeof(Uint32));
 
       // Capture execution times 
-      // levelDuration     += GetExecutionTime(levelEvent[0]);
-      // Increase the level by 1 
+      // #if VERBOSE == 1
+      // gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
+      // explore_times[gpuID]     += GetExecutionTime(exploreEvent[gpuID]);
+      // levelgen_times[gpuID]     += GetExecutionTime(levelEvent[gpuID]);
+      // });
+      // #endif
+
       
       if(iteration == 0){
            start_time = exploreEvent[0].get_profiling_info<info::event_profiling::command_start>();
@@ -536,32 +570,10 @@ void GPURun(int vertexCount,
 
     } // for loop num_runs
 
+    #if VERBOSE == 1
+    printExecutionTimes(explore_times, levelgen_times);
+    #endif
 
-    // // Find the first and last non-zero indices
-    //  size_t ignore_index = sourceNode; // Change this to the index you want to ignore
-    // // Find the first and last non-zero indices, ignoring the specified index
-    // auto [first_index, last_index] = find_first_last_nonzero(h_visit0, ignore_index);
-
-    // // Display results
-    // if (first_index.has_value() && last_index.has_value()) {
-    //     std::cout << "First non-zero index (ignoring index " << ignore_index << "): " << *first_index << "\n";
-    //     std::cout << "Last non-zero index: " << *last_index << "\n";
-    // } else {
-    //     std::cout << "No non-zero values found in the array.\n";
-    // }
- 
-    //  // Find the first and last non-zero indices
-
-    // // Find the first and last non-zero indices, ignoring the specified index
-    // auto [first_index1, last_index1] = find_first_last_nonzero(h_visit1, ignore_index);
-
-    // // Display results
-    // if (first_index1.has_value() && last_index1.has_value()) {
-    //     std::cout << "First non-zero index (ignoring index " << ignore_index << "): " << *first_index1 << "\n";
-    //     std::cout << "Last non-zero index: " << *last_index1 << "\n";
-    // } else {
-    //     std::cout << "No non-zero values found in the array.\n";
-    // }
 
     DistanceHost = distances[num_runs-1];
     // Check if each distances[i] is equal to DistanceHost
@@ -578,7 +590,7 @@ void GPURun(int vertexCount,
 
 
 
-// Assume removeAnomalies function and threshold are defined elsewhere
+    // Assume removeAnomalies function and threshold are defined elsewhere
     double threshold = 1.5; // This means we consider points beyond 1.5 standard deviations as anomalies
     // https://bookdown.org/kevin_davisross/probsim-book/normal-distributions.html 87%
     // explanation for threshold : https://chatgpt.com/share/6e64d349-bdd6-4662-99c2-2d265dffd43c

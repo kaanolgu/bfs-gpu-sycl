@@ -10,9 +10,12 @@ void run_bfs_cpu(int no_of_nodes,
   std::vector<unsigned int>&h_updating_graph_mask, 
   std::vector<unsigned int>&fpga_visited,
   std::vector<int> &h_cost_ref,
-  nlohmann::json &newJsonObj){
+  nlohmann::json &newJsonObj,
+  std::vector<Uint32> &h_visit_offsets){
   char stop;
   unsigned int exploredEdgesCount = 0;
+  std::vector<int> Edgecounts(NUM_GPU, 0);
+  std::vector<int> Nodecounts(NUM_GPU, 0);
   do{
     //if no thread changes this value then the loop stops
     stop=0;
@@ -21,6 +24,15 @@ void run_bfs_cpu(int no_of_nodes,
       if (h_graph_mask[tid] == 1){ 
         h_graph_mask[tid]=0;
         exploredEdgesCount += source_indptr[tid+1] - source_indptr[tid];
+#if VERBOSE == 1  
+        for (int j = 0; j < NUM_GPU + 1; ++j) {
+            if (tid >= h_visit_offsets[j] && tid < h_visit_offsets[j + 1]) {
+                Edgecounts[j] += source_indptr[tid+1] - source_indptr[tid];  // Increment the count for the corresponding range
+                Nodecounts[j] += 1;
+                break;  // Exit the inner loop once the correct range is found
+            }
+        }
+#endif
         for(int i=source_indptr[tid]; i<(source_indptr[tid+1]); i++){
           // int id = source_inds[i+9140365];  //--h_graph_edges is source_inds
           int id = source_inds[i];  // Single Processing Element--h_graph_edges is source_inds
@@ -44,6 +56,10 @@ void run_bfs_cpu(int no_of_nodes,
   }
   while(stop);
 
+#if VERBOSE == 1  
+  for(int i =0; i < Edgecounts.size(); i++)
+  std::cout << "GPU " << i << " Total Nodes Processed " << Nodecounts[i] << " Total Edges Processed " << Edgecounts[i] << std::endl;
+#endif
   newJsonObj["edgesCount"] = exploredEdgesCount;
 }
 

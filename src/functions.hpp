@@ -2,7 +2,6 @@
 #include "unrolled_loop.hpp"
 #include "json.hpp"
 
-
 constexpr int log2(int num) {
     int result = 0;
     int running = num;

@@ -88,14 +88,6 @@ int main(int argc, char * argv[])
   
   std::cout << "######################LOADING MATRIX#########################" << std::endl;
   CSRGraph graph = loadMatrix(NUM_GPU,datasetName);
-
-for(int i =0; i < graph.meta.size(); i++){
-    std::cout << "graph.meta[" << i << "] = " << graph.meta[i] << std::endl;
-}
-
-
-
-
   CSRGraph graph_cpu = loadMatrix(1,datasetName);
   std::cout << "#############################################################\n" << std::endl;
   int numCols = graph_cpu.meta[1];  // cols -> total number of vertices
@@ -128,18 +120,7 @@ for(int i =0; i < graph.meta.size(); i++){
     // Compute partial sum and store the result, starting from position 1
     std::partial_sum(selected.begin(), selected.end(), h_visit_offsets.begin());
 
-        for(int i = 0; i < h_visit_offsets.size(); i++)
-    std::cout << "test[" << i << "]: "<< h_visit_offsets[i] << std::endl;
 
-//   std::vector<std::vector<MyUint1>> h_visit_mask(NUM_GPU);
-//   h_visit_mask[0].resize(529448,0);
-//   h_visit_mask[1].resize(1090184- 529448,0);
-//   h_visit_mask[2].resize(2074257 - 1090184,0);
-//   std::vector<std::vector<MyUint1>> h_visit(NUM_GPU);
-//   h_visit[0].resize(529448,0);
-//   h_visit[1].resize(1090184- 529448,0);
-//   h_visit[2].resize(2074257 - 1090184,0);
-//   h_visit[0][start_vertex]=1;
   
 
   if(NUM_GPU > 1){
@@ -167,7 +148,7 @@ for(int i =0; i < graph.meta.size(); i++){
   host_graph_visited[start_vertex]=1;
   host_level[start_vertex]=0; 
 
-  run_bfs_cpu(numCols,graph_cpu.indptr,graph_cpu.inds, host_graph_mask, host_updating_graph_mask, host_graph_visited, host_level,newJsonObj);
+  run_bfs_cpu(numCols,graph_cpu.indptr,graph_cpu.inds, host_graph_mask, host_updating_graph_mask, host_graph_visited, host_level,newJsonObj,h_visit_offsets);
 
   // Select the element with the maximum value
   auto it = std::max_element(host_level.begin(), host_level.end());
