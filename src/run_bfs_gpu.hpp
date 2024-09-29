@@ -537,12 +537,12 @@ void GPURun(int vertexCount,
       copybackhostEvent = Queues[0].memcpy(frontierCountDevice, &zero, sizeof(Uint32));
 
       // Capture execution times 
-      // #if VERBOSE == 1
-      // gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-      // explore_times[gpuID]     += GetExecutionTime(exploreEvent[gpuID]);
-      // levelgen_times[gpuID]     += GetExecutionTime(levelEvent[gpuID]);
-      // });
-      // #endif
+      #if VERBOSE == 1
+      gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
+      explore_times[gpuID]     += GetExecutionTime(exploreEvent[gpuID]);
+      levelgen_times[gpuID]     += GetExecutionTime(levelEvent[gpuID]);
+      });
+      #endif
 
       
       if(iteration == 0){
