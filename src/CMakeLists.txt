@@ -12,23 +12,12 @@ if("${DEVICE}" STREQUAL "INTEL_MAX_GPU")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsycl -fsycl-targets=intel_gpu_pvc -D INTEL_MAX_GPU")
 elseif("${DEVICE}" STREQUAL "NVIDIA_GPU")
     message(STATUS "Configuring the design to run on NVIDIA_GPU device ${DEVICE}")
-    set(COMPILE_FLAGS_GPU "-fsycl -fsycl-targets=nvptx64-nvidia-cuda -Xsycl-target-backend=nvptx64-nvidia-cuda --cuda-gpu-arch=sm_80")
-    set(HARDWARE_LINK_FLAGS_GPU "-fsycl -fsycl-targets=nvptx64-nvidia-cuda -Xsycl-target-backend=nvptx64-nvidia-cuda --cuda-gpu-arch=sm_80 ${USER_HARDWARE_FLAGS}")
+    set(COMPILE_FLAGS_GPU "-fsycl -fsycl-targets=nvptx64-nvidia-cuda -O1 -Xsycl-target-backend=nvptx64-nvidia-cuda --cuda-gpu-arch=sm_80")
+    set(HARDWARE_LINK_FLAGS_GPU "-fsycl -fsycl-targets=nvptx64-nvidia-cuda -O1 -Xsycl-target-backend=nvptx64-nvidia-cuda --cuda-gpu-arch=sm_80 ${USER_HARDWARE_FLAGS}")
 else()
     message(STATUS "Configuring the design to run on FPGA device ${DEVICE}")
 endif()
 
-
-
-# These are Windows-specific flags:
-# 1. /EHsc This is a Windows-specific flag that enables exception handling in host code
-# 2. /Qactypes Include ac_types headers and link against ac_types emulation libraries
-if(WIN32)
-    set(WIN_FLAG "/EHsc")
-    set(AC_TYPES_FLAG "/Qactypes")
-else()
-    set(AC_TYPES_FLAG "-qactypes")
-endif()
 
 
 # A SYCL ahead-of-time (AoT) compile processes the device code in two stages.
