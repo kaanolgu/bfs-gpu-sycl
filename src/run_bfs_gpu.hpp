@@ -169,7 +169,9 @@ event parallel_explorer_kernel(queue &q,
                                 Uint32* usm_nodes_start,
                                 Uint32 *usm_edges,
                                 Uint32* usm_pipe_1,
-                                MyUint1 *usm_visit_mask)
+                                MyUint1 *usm_visit_mask,
+                                const Uint32 Vstart,
+                                const Uint32 Vsize)
     {
 
 
@@ -231,8 +233,7 @@ event parallel_explorer_kernel(queue &q,
       Uint32  e = sedges[id] + i  - degrees[id]; 
       Uint32  n  = usm_edges[e];   
 
-      
-        usm_visit_mask[n] = 1;
+      usm_visit_mask[n - Vstart] = 1;
       
     } 
           
@@ -275,86 +276,15 @@ event parallel_levelgen_kernel(queue &q,
             Uint32 local_th_deg; // this variable is shared between workitems
       
           if (gid < Vsize) {
-              MyUint1 vmask = usm_visit_mask[gid + Vstart] && !usm_visit[ gid + Vstart];
+              MyUint1 vmask = usm_visit_mask[gid] && !usm_visit[gid];
               if(vmask == 1){
                 usm_dist[gid + Vstart] = iteration + 1;  
-                usm_visit[gid + Vstart] = 1;
+                usm_visit[gid] = 1;
                 sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::device, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
                 usm_pipe[atomic_op_global.fetch_add(1)] = gid + Vstart;
               }
           }
-    //       if (gid < Vsize) {
-    //           sedges[lid] =  gid + Vstart; // Store in sedges at the correct global index
-    //           local_th_deg = usm_visit_mask[ gid + Vstart]  && !usm_visit[ gid + Vstart]; // Assuming this is how you're calculating degree
-    //       }  else {
-    //           local_th_deg = 0;
-    //       }
 
-
-
-    //         // 3. Cumulative sum of total number of nonzeros 
-    //         Uint32 total_nnz = reduce_over_group(item.get_group(), local_th_deg, sycl::plus<>());
-    //         Uint32 length = (Vsize < gid - lid + blockDim) ? (Vsize - (gid -lid)) : blockDim;
-    
-
-
-    //         Uint32 temp_pipe_value = 0;
-    //         Uint32 old_pipe_size;
-    //         if(lid == 0 && total_nnz > 0){
-    //           // reserve a section in usm_pipe from other GPUs to write only that section
-    //           sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::device, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
-    //           temp_pipe_value = atomic_op_global.fetch_add(total_nnz);  
-    //         }
-            
-    //         // check if in the work-group if we have non-zeros if that work group is all 0's then no need to do extra work
-    //         // (initial and very last levels)
-    //       if(total_nnz > 0){
-
-    //         // 2. Exclusive sum of degrees to find total work items per block.
-    //         degrees[lid] = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg, sycl::plus<>());
-
-    //         // this is same value for all work items so no need to have it in shared local accessor
-    //         old_pipe_size = reduce_over_group(item.get_group(), temp_pipe_value, sycl::plus<>());
-    //       }
-
-            
-
-    // for (int i = lid;            // threadIdx.x
-    //     i < total_nnz;  // total degree to process
-    //     i += blockDim    // increment by blockDim.x
-    // ) {
-
-    // /// 4. Compute. Using binary search, find the source vertex each thread is
-    // /// processing, and the corresponding edge, neighbor and weight tuple. Passed
-    // /// to the user-defined lambda operator to process. If there's an output, the
-    // /// resultant neighbor or invalid vertex is written to the output frontier.
-    
-    //   Uint32 it = upper_bound(degrees,length, i);
-    //   Uint32 id =  it - 1;
-    //   Uint32  e = sedges[id] + i  - degrees[id]; 
-  
-    //   usm_dist[e] = iteration + 1; 
-    //   usm_visit[e] = 1;
-    //   usm_pipe[old_pipe_size + i ] = e;
-
-    // } 
-
-
-
-
-          // if (gid < V) {
-          //     MyUint1 vmask = usm_visit_mask[gid];
-          //     if(vmask == 1){
-          //       usm_dist[gid] = iteration + 1;  
-          //       usm_visit[gid] = 1;
-          //       sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::device, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
-          //       usm_pipe[atomic_op_global.fetch_add(1)] = gid;
-          //       usm_visit_mask[gid]=0;
-          //     }
-          // }
-          
-          
-          // usm_pipe_size[0] = 0;
 
         });
         });
@@ -385,23 +315,24 @@ void GPURun(int vertexCount,
   auto Devs = sycl::device::get_devices(info::device_type::gpu);
 
 
-  if (Devs.size() < 2) {
-    std::cout << "Cannot test P2P capabilities, at least two devices are "
-                 "required, exiting."
-              << std::endl;
+  // if (Devs.size() < 2) {
+  //   std::cout << "Cannot test P2P capabilities, at least two devices are "
+  //                "required, exiting."
+  //             << std::endl;
 
-  }
+  // }
 
   std::vector<sycl::queue> Queues;
   std::transform(Devs.begin(), Devs.end(), std::back_inserter(Queues),
                  [](const sycl::device &D) { return sycl::queue{D,sycl::property::queue::enable_profiling{}}; });
   ////////////////////////////////////////////////////////////////////////
-
+  if (Devs.size() > 1){
   if (!Devs[0].ext_oneapi_can_access_peer(
           Devs[1], sycl::ext::oneapi::peer_access::access_supported)) {
     std::cout << "P2P access is not supported by devices, exiting."
               << std::endl;
 
+  }
   }
 
     std::cout << "Running on devices:" << std::endl;
@@ -423,7 +354,10 @@ void GPURun(int vertexCount,
   }
 
 
-
+#if VERBOSE == 1
+for( int i =0; i < h_visit_offsets.size(); i++)
+std::cout << "h_visit_offsets["<< i << "] :" << h_visit_offsets[i] << std::endl;
+#endif
 
     // Compute kernel execution time
     std::vector<sycl::event> levelEvent(NUM_GPU);
@@ -470,8 +404,8 @@ void GPURun(int vertexCount,
 
       OffsetDevice[gpuID]        = malloc_device<Uint32>(offsetSize, Queues[gpuID]);
       EdgesDevice[gpuID]     = malloc_device<Uint32>(indexSize, Queues[gpuID]); 
-      usm_visit_mask[gpuID]    = malloc_device<MyUint1>(h_visit_mask.size(), Queues[gpuID]); 
-      usm_visit[gpuID]    = malloc_device<MyUint1>(h_visit.size(), Queues[gpuID]); 
+      usm_visit_mask[gpuID]    = malloc_device<MyUint1>((h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID]), Queues[gpuID]); 
+      usm_visit[gpuID]    = malloc_device<MyUint1>((h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID]), Queues[gpuID]); 
 
 
       if constexpr (std::is_same_v<vectorT, std::vector<Uint32>>) {
@@ -482,8 +416,13 @@ void GPURun(int vertexCount,
           copyToDevice(Queues[gpuID],OffsetHost[gpuID],OffsetDevice[gpuID]);
       }
   
-      copyToDevice(Queues[gpuID],h_visit_mask,usm_visit_mask[gpuID]);
-      copyToDevice(Queues[gpuID],h_visit,usm_visit[gpuID]);
+      // copyToDevice(Queues[gpuID],h_visit_mask,usm_visit_mask[gpuID]);
+
+      
+      // copyToDevice(Queues[gpuID],h_visit,usm_visit[gpuID]);
+
+      Queues[0].memcpy(usm_visit_mask[gpuID], h_visit_mask.data() + h_visit_offsets[gpuID],(h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID])* sizeof(MyUint1));
+      Queues[0].memcpy(usm_visit[gpuID], h_visit.data() + h_visit_offsets[gpuID], (h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID])* sizeof(MyUint1));
 
     });
     Uint32 *frontierCountDevice = malloc_device<Uint32>(1, Queues[0]);
@@ -512,7 +451,7 @@ void GPURun(int vertexCount,
        
 
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-              exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],iteration,OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, usm_visit_mask[gpuID]);
+              exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],iteration,OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, usm_visit_mask[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1]- h_visit_offsets[gpuID]);
       });
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
             Queues[gpuID].wait();
