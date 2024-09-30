@@ -170,6 +170,7 @@ event parallel_explorer_kernel(queue &q,
                                 Uint32 *usm_edges,
                                 Uint32* usm_pipe_1,
                                 MyUint1 *usm_visit_mask,
+                                MyUint1 *usm_visit,
                                 const Uint32 Vstart,
                                 const Uint32 Vsize)
     {
@@ -232,7 +233,7 @@ event parallel_explorer_kernel(queue &q,
       Uint32 id =  it - 1;
       Uint32  e = sedges[id] + i  - degrees[id]; 
       Uint32  n  = usm_edges[e];   
-
+      if(!usm_visit[n- Vstart])
       usm_visit_mask[n - Vstart] = 1;
       
     } 
@@ -274,13 +275,14 @@ event parallel_levelgen_kernel(queue &q,
             // const int gidX = item.get_global_id(0) + Vstart;    // global id
 
             Uint32 local_th_deg; // this variable is shared between workitems
-      
+          
           if (gid < Vsize) {
-              MyUint1 vmask = usm_visit_mask[gid] && !usm_visit[gid];
+              MyUint1 vmask = usm_visit_mask[gid];
               if(vmask == 1){
                 usm_dist[gid + Vstart] = iteration + 1;  
                 usm_visit[gid] = 1;
-                sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::device, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
+                usm_visit_mask[gid] = 0;
+                sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::system, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
                 usm_pipe[atomic_op_global.fetch_add(1)] = gid + Vstart;
               }
           }
@@ -379,6 +381,8 @@ std::cout << "h_visit_offsets["<< i << "] :" << h_visit_offsets[i] << std::endl;
     std::vector<MyUint1*> usm_visit(NUM_GPU);
     std::vector<Uint32> h_pipe(vertexCount,0);
     std::vector<Uint32> h_pipe_count(1,1);
+    // Uint32* usm_pipe_global   = malloc_shared<Uint32>(vertexCount, Queues[0]);
+
     for(int i =0; i < num_runs; i++){
       // Frontier Start
       
@@ -451,7 +455,7 @@ std::cout << "h_visit_offsets["<< i << "] :" << h_visit_offsets[i] << std::endl;
        
 
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-              exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],iteration,OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, usm_visit_mask[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1]- h_visit_offsets[gpuID]);
+              exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],iteration,OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, usm_visit_mask[gpuID],usm_visit[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1]- h_visit_offsets[gpuID]);
       });
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
             Queues[gpuID].wait();
@@ -466,12 +470,6 @@ std::cout << "h_visit_offsets["<< i << "] :" << h_visit_offsets[i] << std::endl;
 
 
       copyToHost(Queues[0],frontierCountDevice,h_pipe_count);
-      // copyToHost(Queues[0],usm_visit[0],h_visit0);
-      // copyToHost(Queues[1],usm_visit[1],h_visit1);
-     
-      // gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-            // Queues[gpuID].wait();
-      // });
       Queues[0].wait();
       copybackhostEvent = Queues[0].memcpy(frontierCountDevice, &zero, sizeof(Uint32));
 
@@ -514,7 +512,7 @@ std::cout << "h_visit_offsets["<< i << "] :" << h_visit_offsets[i] << std::endl;
     #endif
 
 
-    DistanceHost = distances[num_runs-1];
+    DistanceHost = distances[0];
     // Check if each distances[i] is equal to DistanceHost
     bool all_match_host = true;
     for(int i =0; i < num_runs; i++){
