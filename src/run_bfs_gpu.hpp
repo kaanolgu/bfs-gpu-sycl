@@ -206,7 +206,7 @@ event parallel_explorer_kernel(queue &q,
           }  else {
               local_th_deg = 0;
           }
-            // sycl::group_barrier(item.get_group());
+            sycl::group_barrier(item.get_group());
 
 
             // sycl::group_barrier(item.get_group());
@@ -218,7 +218,7 @@ event parallel_explorer_kernel(queue &q,
                     // 2. Exclusive sum of degrees to find total work items per block.
             degrees[lid] = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg, sycl::plus<>());
       }
-
+sycl::group_barrier(item.get_group());
     for (int i = lid;            // threadIdx.x
         i < total_nnz;  // total degree to process
         i += blockDim    // increment by blockDim.x
@@ -255,7 +255,7 @@ event parallel_levelgen_kernel(queue &q,
                                 const int iteration,
                                 Uint32 *usm_pipe,
                                 Uint32 *usm_pipe_size,
-                                Uint32* usm_dist
+                                int* usm_dist
                                  ){
    // Define the work-group size and the number of work-groups
     const size_t local_size = THREADS_PER_BLOCK;  // Number of work-items per work-group
@@ -279,7 +279,8 @@ event parallel_levelgen_kernel(queue &q,
           if (gid < Vsize) {
               MyUint1 vmask = usm_visit_mask[gid];
               if(vmask == 1){
-                usm_dist[gid + Vstart] = iteration + 1;  
+                // sycl::atomic_ref<int, sycl::memory_order::relaxed,sycl::memory_scope::system, sycl::access::address_space::global_space> atomic_dist_system(usm_dist[gid + Vstart]);
+                usm_dist[gid + Vstart] = (iteration + 1);  
                 usm_visit[gid] = 1;
                 usm_visit_mask[gid] = 0;
                 sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::system, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
@@ -308,7 +309,7 @@ void GPURun(int vertexCount,
                   vectorT &OffsetHost,
                   std::vector<MyUint1> &h_visit_mask,
                   std::vector<MyUint1> &h_visit,
-                  std::vector<Uint32> &DistanceHost,
+                  std::vector<int> &DistanceHost,
                   int sourceNode,const int num_runs,
                   nlohmann::json &newJsonObj,std::vector<Uint32> &h_visit_offsets) noexcept(false) {
 
@@ -372,7 +373,7 @@ std::cout << "h_visit_offsets["<< i << "] :" << h_visit_offsets[i] << std::endl;
   // std::vector<MyUint1> h_visit0(colsCount,0); 
   // std::vector<MyUint1> h_visit1(colsCount,0); 
 
-    std::vector<std::vector<Uint32>> distances(num_runs,DistanceHost);
+    std::vector<std::vector<int>> distances(num_runs,DistanceHost);
     std::vector<double> run_times(num_runs,0);
     int zero = 0;
     std::vector<Uint32*> OffsetDevice(NUM_GPU);
@@ -392,7 +393,7 @@ std::cout << "h_visit_offsets["<< i << "] :" << h_visit_offsets[i] << std::endl;
       h_pipe[0] = sourceNode;
 
       Uint32* usm_pipe_global   = malloc_device<Uint32>(vertexCount, Queues[0]);
-      Uint32* DistanceDevice    = malloc_device<Uint32>(DistanceHost.size(), Queues[0]); 
+      int* DistanceDevice    = malloc_device<int>(DistanceHost.size(), Queues[0]); 
 
     gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
       size_t offsetSize;
@@ -493,7 +494,7 @@ std::cout << "h_visit_offsets["<< i << "] :" << h_visit_offsets[i] << std::endl;
       double total_time = (end_time - start_time)* 1e-6; // ns to ms
       run_times[i] = total_time;
       copyToHost(Queues[0],DistanceDevice,distances[i]);
-
+      Queues[0].wait();
 
     gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
           sycl::free(OffsetDevice[gpuID], Queues[gpuID]);
@@ -513,18 +514,43 @@ std::cout << "h_visit_offsets["<< i << "] :" << h_visit_offsets[i] << std::endl;
 
 
     DistanceHost = distances[0];
+      auto it = std::max_element(DistanceHost.begin(), DistanceHost.end());
+      auto it2 = std::max_element(distances[0].begin(), distances[0].end());
+      
+
+      int maxLevelGPU2 = (*it2);
+  // Check if iterator is not pointing to the end of vector
+  int maxLevelGPU = (*it +2);
     // Check if each distances[i] is equal to DistanceHost
     bool all_match_host = true;
     for(int i =0; i < num_runs; i++){
+      // std::cout << "outer maxLevelGPU : " << maxLevelGPU << std::endl;
+      // std::cout << "outer maxLevelGPU2 : " << maxLevelGPU2 << std::endl;
       if (!std::equal(distances[i].begin(), distances[i].end(), DistanceHost.begin())) {
             all_match_host = false;
             std::cout << "distances[" << i << "] does not match others on GPU.\n";
+                std::cout << "maxLevelGPU : " << maxLevelGPU << std::endl;
+                for (int j = 0; j < maxLevelGPU; j++) {
+                  int countB = std::count(distances[i].begin(), distances[i].end(), j);
+                  std::cout << std::to_string(countB) << ", "; 
+              }
+         std::cout << std::endl;
         }
+       
     }
      if (all_match_host) {
         std::cout << "All distances vectors match each other on GPU.\n";
     }
 
+// # ramble run commands
+// # spack package pr another review
+// met with TomL introduced the excalibur tests repo for reframe
+// # my code working but randomly fails
+// # ng arch we delivered report and new merged build system is working properly stfc 
+// for errors on cpu transformations they check against bench
+// and bench is simple and doesn't have some options so they are 
+// generating issues to be addressed and I think they will change ther CI to orca2_ice_piscces
+// I would need amd mi250x and intel pvc gpu acccess and if it is possible dgx h100 with 8 gpus on one node 
 
 
     // Assume removeAnomalies function and threshold are defined elsewhere

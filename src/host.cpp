@@ -100,7 +100,7 @@ int main(int argc, char * argv[])
 
 
   // GPU
-  std::vector<Uint32> h_dist(numCols,-1);
+  std::vector<int> h_dist(numCols,-1);
   std::vector<Uint32> h_graph_nodes_start;
   std::vector<MyUint1> h_updating_graph_mask(numCols,0);
   std::vector<MyUint1> h_graph_visited(numCols,0); 
