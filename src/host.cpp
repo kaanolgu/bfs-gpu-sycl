@@ -25,36 +25,32 @@ using json = nlohmann::json;
 //--initialize array with maximum limit
 //-------------------------------------------------------------------
 template<typename datatypeA, typename datatypeB>
-void print_levels(std::vector<datatypeA>& A, std::string nameA, std::vector<datatypeB>& B, std::string nameB, int size) {
+bool print_levels(std::vector<datatypeA>& A, std::string nameA, std::vector<std::vector<datatypeB>>& B, std::string nameB, int size) {
     // Define width and separator for formatting
     const int columnWidth = 25;
 
     
     // Print header
-    printSeparator();
-    std::cout << "CPU : ";
+
+    std::cout << "- CPU : ";
     // Print levels and their counts
     for (int i = 0; i < size; i++) {
         int countA = std::count(A.begin(), A.end(), i);
         std::cout << std::to_string(countA) << ", "; 
     }
-        std::cout << "\nGPU : ";
+        std::cout << "\n- GPU : ";
     // Print levels and their counts
+    
     for (int i = 0; i < size; i++) {
-        int countB = std::count(B.begin(), B.end(), i);
+        int countB = std::count(B.back().begin(), B.back().end(), i);
         std::cout << std::to_string(countB) << ", "; 
     }
     
     // Verify results and print the test status
-    bool passed = std::equal(A.begin(), A.end(), B.begin());
-    
-    if (passed) {
-        std::cout << "\n TEST PASSED!" << "\n\n";
-    } else {
-        std::cout << "\n TEST FAILED!" << "\n\n";
-    }
-    
+    bool status = std::equal(A.begin(), A.end(), B.back().begin()) && areAllRowsEqualToLast(B);
 
+    
+    return status;
 }
 
 
@@ -86,26 +82,30 @@ int main(int argc, char * argv[])
   Uint32 offset_inds =0;
 
   
-  std::cout << "######################LOADING MATRIX#########################" << std::endl;
+
   CSRGraph graph = loadMatrix(NUM_GPU,datasetName);
   CSRGraph graph_cpu = loadMatrix(1,datasetName);
-  std::cout << "#############################################################\n" << std::endl;
+
   int numCols = graph_cpu.meta[1];  // cols -> total number of vertices
   int numEdges  = graph_cpu.meta[2];  // nonZ count -> total edges
   int numRows   = graph_cpu.meta[0];  // this it the value we want! (rows)
-  std::cout << std::setw(6) << std::left << "# Graph Information" << "\n Vertices (nodes) = " << numRows << " \n Edges = "<< numEdges << "\n";
-
+      std::cout << std::setw(20) << std::left << "- # vertices" << std::setw(20) << numRows << std::endl;
+      std::cout << std::setw(20) << std::left << "- # edges" << std::setw(20) << numEdges << std::endl;
+      std::cout <<"----------------------------------------"<< std::endl;
+  std::cout << "[SUCCESS]\t" << datasetName << " with " << NUM_GPU << " partitions loaded" << std::endl;
   // Sanity Check if we loaded the graph properly
   assert(numRows <= numCols);
 
 
   // GPU
   std::vector<int> h_dist(numCols,-1);
+  h_dist[start_vertex]=0; 
+  std::vector<std::vector<int>> h_distancesGPU(num_runs,h_dist);
   std::vector<Uint32> h_graph_nodes_start;
   std::vector<MyUint1> h_updating_graph_mask(numCols,0);
   std::vector<MyUint1> h_graph_visited(numCols,0); 
 
-  h_dist[start_vertex]=0; 
+  
   h_graph_visited[start_vertex]=1;
    std::vector<Uint32>  h_visit_offsets(NUM_GPU+1,0);
 
@@ -121,12 +121,16 @@ int main(int argc, char * argv[])
     std::partial_sum(selected.begin(), selected.end(), h_visit_offsets.begin());
 
 
-  
+  #if VERBOSE ==1 
+for( int i =0; i < h_visit_offsets.size(); i++)
+std::cout << "- GPU[" << std::to_string(i) << "] OFFSET:\t" << h_visit_offsets[i] << std::endl;
+std::cout <<"----------------------------------------"<< std::endl;
+#endif
 
   if(NUM_GPU > 1){
-    GPURun(numRows,graph.indsMulti,graph.indptrMulti,h_updating_graph_mask,h_graph_visited,h_dist,start_vertex,num_runs,newJsonObj,h_visit_offsets);  
+    GPURun(numRows,graph.indsMulti,graph.indptrMulti,h_updating_graph_mask,h_graph_visited,h_distancesGPU,start_vertex,num_runs,newJsonObj,h_visit_offsets);  
   }else{
-    GPURun(numRows,graph.inds,graph.indptr,h_updating_graph_mask,h_graph_visited,h_dist,start_vertex,num_runs,newJsonObj,h_visit_offsets); 
+    GPURun(numRows,graph.inds,graph.indptr,h_updating_graph_mask,h_graph_visited,h_distancesGPU,start_vertex,num_runs,newJsonObj,h_visit_offsets); 
   }
 
   
@@ -147,16 +151,19 @@ int main(int argc, char * argv[])
   host_graph_mask[start_vertex]=1;
   host_graph_visited[start_vertex]=1;
   host_level[start_vertex]=0; 
-
-  run_bfs_cpu(numCols,graph_cpu.indptr,graph_cpu.inds, host_graph_mask, host_updating_graph_mask, host_graph_visited, host_level,newJsonObj,h_visit_offsets);
+  std::vector<DeviceInfo> host_run_statistics;
+  run_bfs_cpu(numCols,graph_cpu.indptr,graph_cpu.inds, host_graph_mask, host_updating_graph_mask, host_graph_visited, host_level,newJsonObj,h_visit_offsets,host_run_statistics);
 
   // Select the element with the maximum value
   auto it = std::max_element(host_level.begin(), host_level.end());
   // Check if iterator is not pointing to the end of vector
   int maxLevelCPU = (*it +2);
-
-  print_levels(host_level,"cpu",h_dist,"fpga",maxLevelCPU); // CPU Results
-
+    std::cout <<"----------------------------------------"<< std::endl;
+    bool status = print_levels(host_level,"cpu",h_distancesGPU,"fpga",maxLevelCPU); // CPU Results
+    newJsonObj["valid"] = status;
+    std::cout <<"\n----------------------------------------"<< std::endl;
+    std::cout << (status ? "[SUCCESS]" : "[FAILURE]") << "\tAll results on GPUs (" << num_runs << " runs) cross checked vs CPU results match\n";
+    std::cout <<"----------------------------------------"<< std::endl;
 
     // newJsonObj["num_gpus"] = NUM_GPU; // Adding an array
     // newJsonObj["dataset"] = datasetName;
@@ -164,6 +171,22 @@ int main(int argc, char * argv[])
     newJsonObj["avgMTEPSFilter"] = (static_cast<unsigned int>(newJsonObj["edgesCount"])/(1000000*static_cast<double>(newJsonObj["avgExecutionTimeFiltered"])*1e-3));
     newJsonObj["maxMTEPSFilter"] = (static_cast<unsigned int>(newJsonObj["edgesCount"])/(1000000*static_cast<double>(newJsonObj["minExecutionTimeFiltered"])*1e-3));
     newJsonObj["edgesCoverage"] = static_cast<double>(newJsonObj["edgesCount"]) / numEdges * 100.0;
+
+
+#if VERBOSE == 1
+std::cout << std::endl;
+std::cout << std::endl;
+std::cout << std::endl;
+printDeviceInfo(host_run_statistics);   
+std::cout << std::endl;
+std::cout << std::endl;
+std::cout << std::endl;
+
+
+#endif
+
+
+
 
 
 

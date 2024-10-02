@@ -2,47 +2,10 @@
 #include "unrolled_loop.hpp"
 #include "json.hpp"
 
-constexpr int log2(int num) {
-    int result = 0;
-    int running = num;
 
-    while (running > 1) {
-        result++;
-        running /= 2;
-    }
-
-    int comp = 1;
-
-    for (int i = 0; i < result; i++) {
-        comp *= 2;
-    }
-
-    if (num != comp) {
-        result++;
-    }
-    
-    return result;
-}
-
-constexpr int BUFFER_SIZE = 16;
 using MyUint1 = unsigned char; 
-using d_type3 = char;
 using Uint32 = unsigned int;
 
-
-class Timer {
-public:
-  Timer() : start_(std::chrono::steady_clock::now()) {}
-
-  double Elapsed() {
-    auto now = std::chrono::steady_clock::now();
-    return std::chrono::duration_cast<Duration>(now - start_).count();
-  }
-
-private:
-  using Duration = std::chrono::duration<double>;
-  std::chrono::steady_clock::time_point start_;
-};
 
 
 
@@ -63,7 +26,6 @@ public:
                 if (pos != std::string::npos) {
                     std::string name = arg.substr(2, pos - 2); // Extract key
                     std::string value = arg.substr(pos + 1);    // Extract value
-                    std::cout << "key L " << name << ", value = " << value << std::endl;
                     if (arguments.find(name) != arguments.end()) {
                         arguments[name] = value;
                     }
@@ -72,7 +34,6 @@ public:
                 else if (i + 1 < argc && argv[i + 1][0] != '-') {
                     std::string name = arg.substr(2); // Extract key
                     std::string value = argv[++i]; // Get the next argument as value
-                    std::cout << "key S " << name << ", value = " << value << std::endl;
                     if (arguments.find(name) != arguments.end()) {
                         arguments[name] = value;
                     }
@@ -94,12 +55,8 @@ public:
 
     // Method to print all arguments in a formatted table
     void printArguments() const {
-        std::cout << std::setw(20) << std::left << "Argument"
-                  << std::setw(20) << "Value" << std::endl;
-        std::cout << std::string(40, '-') << std::endl;
-
         for (const auto& pair : arguments) {
-            std::cout << std::setw(20) << std::left << "--" + pair.first
+            std::cout << std::setw(20) << std::left << "-" + pair.first
                       << std::setw(20) << pair.second << std::endl;
         }
     }
@@ -149,23 +106,12 @@ const char separator = ' ';
 const int nameWidth = 24;
 const int numWidth = 24;
 
-// Function to print a separator line
-void printSeparator() {
-    std::cout << "|" << std::string(47, '-') << "|\n";
-}
 
-// Function to print a table header with two columns
-void printHeader(const std::string& header1, const std::string& header2) {
-    printSeparator();
-    std::cout << "| " << std::left << std::setw(nameWidth) << std::setfill(separator) << header1
-              << "| " << std::setw(numWidth) << std::setfill(separator) << header2 << " |\n";
-    printSeparator();
-}
 
 // Function to print a formatted row with a label and value
 void printRow(const std::string& label, const std::string& value) {
-    std::cout << "| " << std::left << std::setw(nameWidth) << std::setfill(separator) << label
-              << "| " << std::setw(numWidth) << std::setfill(separator) << value << " |\n";
+    std::cout << "- " << std::left << std::setw(nameWidth) << std::setfill(separator) << label
+              << " " << std::setw(numWidth) << std::setfill(separator) << value << "\n";
 }
 
 // Function to format double values with fixed precision
@@ -173,4 +119,52 @@ std::string formatDouble(double value, int precision = 2) {
     std::ostringstream oss;
     oss << std::fixed << std::setprecision(precision) << value;
     return oss.str();
+}
+
+bool areAllRowsEqualToLast(const std::vector<std::vector<int>>& h_distancesGPU) {
+    // Check if the vector is empty or has only one row
+    if (h_distancesGPU.size() < 2) {
+        return true; // Consider it as matching
+    }
+
+    const auto& lastRow = h_distancesGPU.back(); // Get the last row
+
+    // Check if all rows match the last row using std::equal
+    for (size_t i = 0; i < h_distancesGPU.size() - 1; ++i) {
+        // Use std::equal to compare the current row with the last row
+        if (!std::equal(h_distancesGPU[i].begin(), h_distancesGPU[i].end(), lastRow.begin())) {
+            std::cout << "distanceGPU[" << i << "] does not match the last row ";
+            for (int i = 0; i < h_distancesGPU[i].size(); i++) {
+                int countB = std::count(h_distancesGPU[i].begin(), h_distancesGPU[i].end(), i);
+                std::cout << std::to_string(countB) << ", "; 
+            }
+            return false; // Return false if any row doesn't match
+        }
+    }
+
+    return true; // All rows matched the last row
+}
+
+struct DeviceInfo {
+    int gpuID;  // Changed from deviceID to gpuID
+    long long edgesProcessed;  // Changed from totalEdgesProcessed to edgesProcessed
+    double percentage;
+};
+
+void printDeviceInfo(const std::vector<DeviceInfo>& devices) {
+    std::cout << std::left << std::setw(10) << "GPU ID"
+              << std::setw(30) << "Edges Processed (*)"
+              << std::setw(15) << "Percentage" << std::endl;
+
+    std::cout << std::string(55, '-') << std::endl; // Separator line
+
+    for (const auto& device : devices) {
+        std::cout << std::left << std::setw(10) << device.gpuID
+                  << std::setw(30) << device.edgesProcessed
+                  << std::setw(15) << std::fixed << std::setprecision(2) << device.percentage << " %" << std::endl;
+    }
+
+    // Add the note at the bottom
+    std::cout << std::string(55, '-') << std::endl; // Another separator line
+    std::cout << "* : including already visited because we keep asking \"are you visited?\"]" << std::endl;
 }

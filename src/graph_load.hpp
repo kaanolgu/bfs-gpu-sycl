@@ -20,8 +20,9 @@ struct CSRGraph {
 };
 
 void readFromMM(const char *filename, std::vector<Uint32> &buffer) {
-    std::cout << "Reading " << filename << "..." ;
-
+    #if VERBOSE == 1
+    std::cout << "- Reading " << filename << "..." ;
+    #endif
     std::ifstream file(filename, std::ios::binary);
     if (!file) {
         std::cerr << "ERROR: File " << filename << " not found!" << std::endl;
@@ -41,14 +42,16 @@ void readFromMM(const char *filename, std::vector<Uint32> &buffer) {
     buffer.resize(originalSize + fileSize / sizeof(Uint32));
 
     file.read(reinterpret_cast<char *>(buffer.data() + originalSize), fileSize);
-
+#if VERBOSE == 1
     std::cout << " OK" << std::endl;
+    #endif
 }
 
 CSRGraph loadMatrix(Uint32 partitionCount, std::string datasetName) {
     CSRGraph graph;
+    #if VERBOSE == 1
     std::cout << "Loading matrix " << datasetName << " with " << partitionCount << " partitions..." << std::endl;
-    
+    #endif
     std::string pth = "/dataset/";
     std::string non_switch = getenv("PWD") + pth;
     std::string temp = datasetName;

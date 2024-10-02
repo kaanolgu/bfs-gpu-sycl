@@ -11,7 +11,8 @@ void run_bfs_cpu(int no_of_nodes,
   std::vector<unsigned int>&fpga_visited,
   std::vector<int> &h_cost_ref,
   nlohmann::json &newJsonObj,
-  std::vector<Uint32> &h_visit_offsets){
+  std::vector<Uint32> &h_visit_offsets,
+    std::vector<DeviceInfo> &host_run_statistics){
   char stop;
   unsigned int exploredEdgesCount = 0;
   std::vector<int> Edgecounts(NUM_GPU, 0);
@@ -24,7 +25,7 @@ void run_bfs_cpu(int no_of_nodes,
       if (h_graph_mask[tid] == 1){ 
         h_graph_mask[tid]=0;
         exploredEdgesCount += source_indptr[tid+1] - source_indptr[tid];
-#if DEBUG == 1  
+#if VERBOSE == 1  
         for (int j = 0; j < NUM_GPU + 1; ++j) {
             if (tid >= h_visit_offsets[j] && tid < h_visit_offsets[j + 1]) {
                 Edgecounts[j] += source_indptr[tid+1] - source_indptr[tid];  // Increment the count for the corresponding range
@@ -56,9 +57,11 @@ void run_bfs_cpu(int no_of_nodes,
   }
   while(stop);
 
-#if DEBUG == 1  
-  for(int i =0; i < Edgecounts.size(); i++)
-  std::cout << "GPU " << i << " Total Nodes Processed " << Nodecounts[i] << " Total Edges Processed " << Edgecounts[i] << std::endl;
+#if VERBOSE == 1  
+for(int i =0; i < Edgecounts.size(); i++){
+  DeviceInfo new_info = {i, Edgecounts[i], (double)(Edgecounts[i] /  std::accumulate(Edgecounts.begin(), Edgecounts.end(), 0.0)) * 100};
+  host_run_statistics.push_back(new_info);
+}
 #endif
   newJsonObj["edgesCount"] = exploredEdgesCount;
 }

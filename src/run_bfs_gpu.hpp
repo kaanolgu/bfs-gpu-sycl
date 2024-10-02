@@ -44,42 +44,47 @@ using namespace sycl;
 
 void printExecutionTimes(const std::vector<double>& execution_timesA, const std::vector<double>& execution_timesB) {
     const int NUM_TIMES = execution_timesA.size();
-    const int columnWidth = 20;  // Adjusted to fit values and percentages
+    const int columnWidth = 9;      // Width for time values
+    const int percentageWidth = 9;   // Width for percentage values
 
-    // Calculate the grand total (sum of all elements in A and B)
+    // Calculate grand total
     double grandTotal = std::accumulate(execution_timesA.begin(), execution_timesA.end(), 0.0)
                       + std::accumulate(execution_timesB.begin(), execution_timesB.end(), 0.0);
 
     // Print header
-    std::cout << std::setw(10) << "GPU ID"
-              << std::setw(columnWidth) << "ExploreNeighbours [ms] ( % )"
-              << std::setw(columnWidth) << "Levelgen [ms] ( % )"
-              << std::setw(columnWidth) << "Row Total ( % )" << std::endl;
+    std::cout << std::left << std::setw(10) << "GPU ID"
+              << std::setw(columnWidth) << "EN [ms]"
+              << std::setw(percentageWidth) << "(%)"
+              << std::setw(columnWidth) << "LG [ms]"
+              << std::setw(percentageWidth) << "(%)"
+              << std::setw(columnWidth) << "Total"
+              << std::setw(percentageWidth) << "(%)" << std::endl;
 
-    std::cout << std::string(10 + columnWidth * 3, '-') << std::endl;
-
-    // Calculate sum of all row totals
-    double rowGrandTotal = 0.0;
-    for (int i = 0; i < NUM_TIMES; ++i) {
-        rowGrandTotal += execution_timesA[i] + execution_timesB[i];
-    }
+    std::cout << std::string(10 + columnWidth * 3 + percentageWidth * 3, '-') << std::endl; // Separator line
 
     // Print each row
     for (int i = 0; i < NUM_TIMES; ++i) {
         double rowTotal = execution_timesA[i] + execution_timesB[i];
         double percentageA = (execution_timesA[i] / grandTotal) * 100;
         double percentageB = (execution_timesB[i] / grandTotal) * 100;
-        double percentageRow = (rowTotal / rowGrandTotal) * 100;
+        double percentageRow = (rowTotal / (execution_timesA[i] + execution_timesB[i])) * 100;
 
-        std::cout << std::setw(10) << i + 1
-                  << std::setw(columnWidth) << std::fixed << std::setprecision(6)
-                  << execution_timesA[i] << " (" << std::setprecision(2) << percentageA << "%)"
-                  << std::setw(columnWidth) << std::fixed << std::setprecision(6)
-                  << execution_timesB[i] << " (" << std::setprecision(2) << percentageB << "%)"
-                  << std::setw(columnWidth) << std::fixed << std::setprecision(6)
-                  << rowTotal << " (" << std::setprecision(2) << percentageRow << "%)" << std::endl;
+        std::cout << std::left << std::setw(10) << (i + 1)
+                  << std::setw(columnWidth) << std::fixed << std::setprecision(3) << execution_timesA[i]
+                  << std::setw(percentageWidth) << std::setprecision(2) <<percentageA << "%"
+                  << std::setw(columnWidth) << std::fixed << std::setprecision(3) << execution_timesB[i]
+                  << std::setw(percentageWidth) << std::setprecision(2) << percentageB << "%"
+                  << std::setw(columnWidth) << std::fixed << std::setprecision(3) << rowTotal
+                  << std::setw(percentageWidth) << std::setprecision(2) << percentageRow << "%" << std::endl;
     }
+
+    std::cout << std::string(10 + columnWidth * 3 + percentageWidth * 3, '-') << std::endl; // Ending separator line
+
+    // Add notes at the bottom
+    std::cout << "* EN: Explore Neighbours Kernel" << std::endl;
+    std::cout << "* LG: Levelgen" << std::endl;
 }
+
 
 
 
@@ -308,7 +313,7 @@ void GPURun(int vertexCount,
                   vectorT &OffsetHost,
                   std::vector<MyUint1> &h_visit_mask,
                   std::vector<MyUint1> &h_visit,
-                  std::vector<int> &DistanceHost,
+                  std::vector<std::vector<int>> &h_distance,
                   int sourceNode,const int num_runs,
                   nlohmann::json &newJsonObj,std::vector<Uint32> &h_visit_offsets) noexcept(false) {
 
@@ -336,6 +341,7 @@ void GPURun(int vertexCount,
 
   }
   }
+    std::cout <<"\n----------------------------------------"<< std::endl;
 
     std::cout << "Running on devices:" << std::endl;
     for(int i =0; i < Queues.size(); i++){
@@ -343,7 +349,7 @@ void GPURun(int vertexCount,
     std::cout << i << ":\t" << Queues[i].get_device().get_info<sycl::info::device::name>()
               << std::endl;
     }
-
+std::cout <<"----------------------------------------"<< std::endl;
   // Enables Devs[x] to access Devs[y] memory and vice versa.
   if (Devs.size() > 1){
   gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID_i) {
@@ -356,10 +362,7 @@ void GPURun(int vertexCount,
   }
 
 
-#if VERBOSE == 1
-for( int i =0; i < h_visit_offsets.size(); i++)
-std::cout << "h_visit_offsets["<< i << "] :" << h_visit_offsets[i] << std::endl;
-#endif
+
 
     // Compute kernel execution time
     std::vector<sycl::event> levelEvent(NUM_GPU);
@@ -372,7 +375,7 @@ std::cout << "h_visit_offsets["<< i << "] :" << h_visit_offsets[i] << std::endl;
   // std::vector<MyUint1> h_visit0(colsCount,0); 
   // std::vector<MyUint1> h_visit1(colsCount,0); 
 
-    std::vector<std::vector<int>> distances(num_runs,DistanceHost);
+
     std::vector<double> run_times(num_runs,0);
     int zero = 0;
     std::vector<Uint32*> OffsetDevice(NUM_GPU);
@@ -392,7 +395,7 @@ std::cout << "h_visit_offsets["<< i << "] :" << h_visit_offsets[i] << std::endl;
       h_pipe[0] = sourceNode;
 
       Uint32* usm_pipe_global   = malloc_device<Uint32>(vertexCount, Queues[0]);
-      int* DistanceDevice    = malloc_device<int>(DistanceHost.size(), Queues[0]); 
+      int* DistanceDevice    = malloc_device<int>(h_distance.back().size(), Queues[0]); 
 
     gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
       size_t offsetSize;
@@ -438,7 +441,7 @@ std::cout << "h_visit_offsets["<< i << "] :" << h_visit_offsets[i] << std::endl;
 
 
     copyToDevice(Queues[0],h_pipe,usm_pipe_global);
-    copyToDevice(Queues[0],distances[i],DistanceDevice);
+    copyToDevice(Queues[0],h_distance[i],DistanceDevice);
 
 
 
@@ -492,7 +495,7 @@ std::cout << "h_visit_offsets["<< i << "] :" << h_visit_offsets[i] << std::endl;
       // end_time = max(levelEvent.get_profiling_info<info::event_profiling::command_end>(),levelEventQ.get_profiling_info<info::event_profiling::command_end>());
       double total_time = (end_time - start_time)* 1e-6; // ns to ms
       run_times[i] = total_time;
-      copyToHost(Queues[0],DistanceDevice,distances[i]);
+      copyToHost(Queues[0],DistanceDevice,h_distance[i]);
       Queues[0].wait();
 
     gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
@@ -512,44 +515,6 @@ std::cout << "h_visit_offsets["<< i << "] :" << h_visit_offsets[i] << std::endl;
     #endif
 
 
-    DistanceHost = distances[0];
-      auto it = std::max_element(DistanceHost.begin(), DistanceHost.end());
-      auto it2 = std::max_element(distances[0].begin(), distances[0].end());
-      
-
-      int maxLevelGPU2 = (*it2);
-  // Check if iterator is not pointing to the end of vector
-  int maxLevelGPU = (*it +2);
-    // Check if each distances[i] is equal to DistanceHost
-    bool all_match_host = true;
-    for(int i =0; i < num_runs; i++){
-      // std::cout << "outer maxLevelGPU : " << maxLevelGPU << std::endl;
-      // std::cout << "outer maxLevelGPU2 : " << maxLevelGPU2 << std::endl;
-      if (!std::equal(distances[i].begin(), distances[i].end(), DistanceHost.begin())) {
-            all_match_host = false;
-            std::cout << "distances[" << i << "] does not match others on GPU.\n";
-                std::cout << "maxLevelGPU : " << maxLevelGPU << std::endl;
-                for (int j = 0; j < maxLevelGPU; j++) {
-                  int countB = std::count(distances[i].begin(), distances[i].end(), j);
-                  std::cout << std::to_string(countB) << ", "; 
-              }
-         std::cout << std::endl;
-        }
-       
-    }
-     if (all_match_host) {
-        std::cout << "All distances vectors match each other on GPU.\n";
-    }
-
-// # ramble run commands
-// # spack package pr another review
-// met with TomL introduced the excalibur tests repo for reframe
-// # my code working but randomly fails
-// # ng arch we delivered report and new merged build system is working properly stfc 
-// for errors on cpu transformations they check against bench
-// and bench is simple and doesn't have some options so they are 
-// generating issues to be addressed and I think they will change ther CI to orca2_ice_piscces
-// I would need amd mi250x and intel pvc gpu acccess and if it is possible dgx h100 with 8 gpus on one node 
 
 
     // Assume removeAnomalies function and threshold are defined elsewhere
@@ -560,34 +525,27 @@ std::cout << "h_visit_offsets["<< i << "] :" << h_visit_offsets[i] << std::endl;
     std::vector<double> filteredData = removeAnomalies(run_times, threshold);
 
     // Output the filtered data in a formatted table
-    // printHeader("Filtered", "Wall-Clock Time (ms)");
-    // int index = 0;
-    // for (const auto& time : filteredData) {
-    //     printRow("Run #" + std::to_string(index++) + ":", formatDouble(time));
-    // }
-    printSeparator();
-    printRow("Average (filtered) Time", formatDouble(std::accumulate(filteredData.begin(), filteredData.end(), 0.0) / filteredData.size()));
-    printSeparator();
-    printRow("Minimum (filtered) Time", formatDouble(*std::min_element(filteredData.begin(), filteredData.end())));
-    printSeparator();
-    // printHeader("Kernel", "Wall-Clock Time (ns)");
-    // for (const auto& run_time : run_times) {
-    //     std::cout << run_time << std::endl;
-    // }
+   
+    std::cout <<"\n----------------------------------------"<< std::endl;
+
+    printRow("Average (filtered) Time:", formatDouble(std::accumulate(filteredData.begin(), filteredData.end(), 0.0) / filteredData.size())+ " (ms)");
+    printRow("Minimum (filtered) Time:", formatDouble(*std::min_element(filteredData.begin(), filteredData.end()))+ " (ms)");
+  
+
 
     double total_time = std::accumulate(run_times.begin(), run_times.end(), 0.0) / run_times.size();
     double total_time_filtered = std::accumulate(filteredData.begin(), filteredData.end(), 0.0) / filteredData.size();
     double minimum_time_filtered = *std::min_element(filteredData.begin(), filteredData.end());
 
     // Print events and execution times
-    printRow("Total Execution Time:", formatDouble(total_time) + " (ms)");
-    printSeparator();
+    printRow("Average Execution Time:", formatDouble(total_time) + " (ms)");
+ 
 
     newJsonObj["rawExecutionTimeAll"] = run_times;
     newJsonObj["avgExecutionTime"] = total_time;
     newJsonObj["avgExecutionTimeFiltered"] = total_time_filtered;
     newJsonObj["minExecutionTimeFiltered"] = minimum_time_filtered;
-    newJsonObj["valid"] = all_match_host;
+
  
     // The queue destructor is invoked when q passes out of scope.
     // q's destructor invokes q's exception handler on any device exceptions.
