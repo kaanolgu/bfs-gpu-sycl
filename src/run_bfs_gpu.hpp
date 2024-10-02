@@ -45,7 +45,7 @@ using namespace sycl;
 void printExecutionTimes(const std::vector<double>& execution_timesA, const std::vector<double>& execution_timesB) {
     const int NUM_TIMES = execution_timesA.size();
     const int columnWidth = 9;      // Width for time values
-    const int percentageWidth = 9;   // Width for percentage values
+    const int percentageWidth = 5;   // Width for percentage values
 
     // Calculate grand total
     double grandTotal = std::accumulate(execution_timesA.begin(), execution_timesA.end(), 0.0)
@@ -67,7 +67,7 @@ void printExecutionTimes(const std::vector<double>& execution_timesA, const std:
         double rowTotal = execution_timesA[i] + execution_timesB[i];
         double percentageA = (execution_timesA[i] / grandTotal) * 100;
         double percentageB = (execution_timesB[i] / grandTotal) * 100;
-        double percentageRow = (rowTotal / (execution_timesA[i] + execution_timesB[i])) * 100;
+        double percentageRow = (rowTotal / grandTotal) * 100;
 
         std::cout << std::left << std::setw(10) << (i + 1)
                   << std::setw(columnWidth) << std::fixed << std::setprecision(3) << execution_timesA[i]
@@ -523,6 +523,7 @@ std::cout <<"----------------------------------------"<< std::endl;
     // explanation for threshold : https://chatgpt.com/share/6e64d349-bdd6-4662-99c2-2d265dffd43c
     // Remove anomalies
     std::vector<double> filteredData = removeAnomalies(run_times, threshold);
+    std::vector<double> filteredDataNOF = removeAnomaliesnofilter(run_times);
 
     // Output the filtered data in a formatted table
    
@@ -530,7 +531,10 @@ std::cout <<"----------------------------------------"<< std::endl;
 
     printRow("Average (filtered) Time:", formatDouble(std::accumulate(filteredData.begin(), filteredData.end(), 0.0) / filteredData.size())+ " (ms)");
     printRow("Minimum (filtered) Time:", formatDouble(*std::min_element(filteredData.begin(), filteredData.end()))+ " (ms)");
-  
+    
+    
+    printRow("Average (90%) Time:", formatDouble(std::accumulate(filteredDataNOF.begin(), filteredDataNOF.end(), 0.0) / filteredDataNOF.size())+ " (ms)");
+    printRow("Minimum (90%) Time:", formatDouble(*std::min_element(filteredDataNOF.begin(), filteredDataNOF.end()))+ " (ms)");
 
 
     double total_time = std::accumulate(run_times.begin(), run_times.end(), 0.0) / run_times.size();

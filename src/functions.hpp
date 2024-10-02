@@ -98,7 +98,19 @@ std::vector<double> removeAnomalies(const std::vector<double>& data, double thre
     return filteredData;
 }
 
+std::vector<double> removeAnomaliesnofilter(const std::vector<double>& data) {
+    std::vector<double> filteredData;
 
+    // Calculate the number of elements to skip (10% of the data)
+    size_t numToSkip = static_cast<size_t>(data.size() * 0.1);
+    
+    // Start from the 10% index to the end of the data
+    for (size_t i = numToSkip; i < data.size(); ++i) {
+        filteredData.push_back(data[i]);
+    }
+
+    return filteredData;
+}
 // Print out data 
 
 // Constants for formatting
