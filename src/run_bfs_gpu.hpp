@@ -356,7 +356,7 @@ void GPURun(int vertexCount,
   }
 
 
-#if DEBUG == 1
+#if VERBOSE == 1
 for( int i =0; i < h_visit_offsets.size(); i++)
 std::cout << "h_visit_offsets["<< i << "] :" << h_visit_offsets[i] << std::endl;
 #endif
@@ -474,7 +474,7 @@ std::cout << "h_visit_offsets["<< i << "] :" << h_visit_offsets[i] << std::endl;
       copybackhostEvent = Queues[0].memcpy(frontierCountDevice, &zero, sizeof(Uint32));
 
       // Capture execution times 
-      #if DEBUG == 1
+      #if VERBOSE == 1
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
       explore_times[gpuID]     += GetExecutionTime(exploreEvent[gpuID]);
       levelgen_times[gpuID]     += GetExecutionTime(levelEvent[gpuID]);
@@ -507,7 +507,7 @@ std::cout << "h_visit_offsets["<< i << "] :" << h_visit_offsets[i] << std::endl;
 
     } // for loop num_runs
 
-    #if DEBUG == 1
+    #if VERBOSE == 1
     printExecutionTimes(explore_times, levelgen_times);
     #endif
 

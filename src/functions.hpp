@@ -25,7 +25,7 @@ constexpr int log2(int num) {
 }
 
 constexpr int BUFFER_SIZE = 16;
-using MyUint1 = unsigned int; 
+using MyUint1 = unsigned char; 
 using d_type3 = char;
 using Uint32 = unsigned int;
 
