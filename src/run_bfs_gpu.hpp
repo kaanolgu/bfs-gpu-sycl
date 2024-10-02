@@ -279,7 +279,6 @@ event parallel_levelgen_kernel(queue &q,
           if (gid < Vsize) {
               MyUint1 vmask = usm_visit_mask[gid];
               if(vmask == 1){
-                // sycl::atomic_ref<int, sycl::memory_order::relaxed,sycl::memory_scope::system, sycl::access::address_space::global_space> atomic_dist_system(usm_dist[gid + Vstart]);
                 usm_dist[gid + Vstart] = (iteration + 1);  
                 usm_visit[gid] = 1;
                 usm_visit_mask[gid] = 0;
@@ -357,7 +356,7 @@ void GPURun(int vertexCount,
   }
 
 
-#if VERBOSE == 1
+#if DEBUG == 1
 for( int i =0; i < h_visit_offsets.size(); i++)
 std::cout << "h_visit_offsets["<< i << "] :" << h_visit_offsets[i] << std::endl;
 #endif
@@ -475,7 +474,7 @@ std::cout << "h_visit_offsets["<< i << "] :" << h_visit_offsets[i] << std::endl;
       copybackhostEvent = Queues[0].memcpy(frontierCountDevice, &zero, sizeof(Uint32));
 
       // Capture execution times 
-      #if VERBOSE == 1
+      #if DEBUG == 1
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
       explore_times[gpuID]     += GetExecutionTime(exploreEvent[gpuID]);
       levelgen_times[gpuID]     += GetExecutionTime(levelEvent[gpuID]);
@@ -508,7 +507,7 @@ std::cout << "h_visit_offsets["<< i << "] :" << h_visit_offsets[i] << std::endl;
 
     } // for loop num_runs
 
-    #if VERBOSE == 1
+    #if DEBUG == 1
     printExecutionTimes(explore_times, levelgen_times);
     #endif
 
