@@ -189,7 +189,7 @@ event parallel_explorer_kernel(queue &q,
       // Setup the range
       nd_range<1> range(global_size, local_size);
 
-          auto e = q.submit([&](handler& h) {
+      auto e = q.submit([&](handler& h) {
             // Local memory for exclusive sum, shared within the work-group
             sycl::local_accessor<Uint32> sedges(local_size, h);
             sycl::local_accessor<Uint32> degrees(local_size, h);
@@ -204,26 +204,22 @@ event parallel_explorer_kernel(queue &q,
 
            // 1. Read from usm_pipe
           if (gid < V) {
-              
               v = usm_pipe_1[gid];
               sedges[lid] = usm_nodes_start[v]; // Store in sedges at the correct global index
               local_th_deg = usm_nodes_start[v+1] - usm_nodes_start[v]; // Assuming this is how you're calculating degree
           }  else {
               local_th_deg = 0;
           }
-            sycl::group_barrier(item.get_group());
 
-
-            // sycl::group_barrier(item.get_group());
-
-            // 3. Cumulative sum of total number of nonzeros 
-            Uint32 total_nnz = reduce_over_group(item.get_group(), local_th_deg, sycl::plus<>());
-            Uint32 length = (V < gid - lid + blockDim) ? (V - (gid -lid)) : blockDim;
-      if(total_nnz > 0){
-                    // 2. Exclusive sum of degrees to find total work items per block.
-            degrees[lid] = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg, sycl::plus<>());
-      }
-sycl::group_barrier(item.get_group());
+          // 2. Cumulative sum of total number of nonzeros 
+          Uint32 total_nnz = reduce_over_group(item.get_group(), local_th_deg, sycl::plus<>());
+          Uint32 length = (V < gid - lid + blockDim) ? (V - (gid -lid)) : blockDim;
+          // 3. Exclusive sum of degrees to find total work items per block.
+            if(total_nnz > 0){
+              degrees[lid] = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg, sycl::plus<>());
+            }
+            // the exclusive scan over group does not sync the results so group_barrier is needed here
+          sycl::group_barrier(item.get_group());
     for (int i = lid;            // threadIdx.x
         i < total_nnz;  // total degree to process
         i += blockDim    // increment by blockDim.x
@@ -529,19 +525,19 @@ std::cout <<"----------------------------------------"<< std::endl;
    
     std::cout <<"\n----------------------------------------"<< std::endl;
 
-    printRow("Average (filtered) Time:", formatDouble(std::accumulate(filteredData.begin(), filteredData.end(), 0.0) / filteredData.size())+ " (ms)");
-    printRow("Minimum (filtered) Time:", formatDouble(*std::min_element(filteredData.begin(), filteredData.end()))+ " (ms)");
-    
-    
-    printRow("Average (90%) Time:", formatDouble(std::accumulate(filteredDataNOF.begin(), filteredDataNOF.end(), 0.0) / filteredDataNOF.size())+ " (ms)");
-    printRow("Minimum (90%) Time:", formatDouble(*std::min_element(filteredDataNOF.begin(), filteredDataNOF.end()))+ " (ms)");
-
-
     double total_time = std::accumulate(run_times.begin(), run_times.end(), 0.0) / run_times.size();
     double total_time_filtered = std::accumulate(filteredData.begin(), filteredData.end(), 0.0) / filteredData.size();
     double minimum_time_filtered = *std::min_element(filteredData.begin(), filteredData.end());
-
+    double total_time_90f = std::accumulate(filteredDataNOF.begin(), filteredDataNOF.end(), 0.0) / filteredDataNOF.size();
+    double minimum_time_90f = *std::min_element(filteredDataNOF.begin(), filteredDataNOF.end());
+    
     // Print events and execution times
+    printRow("Average (filtered) Time:", formatDouble(total_time_filtered)+ " (ms)");
+    printRow("Minimum (filtered) Time:", formatDouble(minimum_time_filtered)+ " (ms)");
+    
+    printRow("Average (90%) Time:", formatDouble(total_time_90f)+ " (ms)");
+    printRow("Minimum (90%) Time:", formatDouble(minimum_time_90f)+ " (ms)");
+    
     printRow("Average Execution Time:", formatDouble(total_time) + " (ms)");
  
 
@@ -549,7 +545,8 @@ std::cout <<"----------------------------------------"<< std::endl;
     newJsonObj["avgExecutionTime"] = total_time;
     newJsonObj["avgExecutionTimeFiltered"] = total_time_filtered;
     newJsonObj["minExecutionTimeFiltered"] = minimum_time_filtered;
-
+    newJsonObj["avgExecutionTime90f"] = total_time_90f;
+    newJsonObj["minExecutionTime90f"] = minimum_time_90f;
  
     // The queue destructor is invoked when q passes out of scope.
     // q's destructor invokes q's exception handler on any device exceptions.
