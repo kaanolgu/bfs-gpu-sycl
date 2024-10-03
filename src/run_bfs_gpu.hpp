@@ -241,7 +241,7 @@ event parallel_explorer_kernel(queue &q,
 
 template <int krnl_id>
 event parallel_levelgen_kernel(queue &q,
-                                const Uint32 Vstart,
+                                Uint32* Vstart,
                                 const Uint32 Vsize,
                                 MyUint1 *usm_visit_mask,
                                 MyUint1 *usm_visit,
@@ -263,11 +263,11 @@ event parallel_levelgen_kernel(queue &q,
           if (gid < Vsize) {
               MyUint1 vmask = usm_visit_mask[gid];
               if(vmask == 1){
-                usm_dist[gid + Vstart] = level_plus_one;  
+                usm_dist[gid + Vstart[krnl_id]] = level_plus_one;  
                 usm_visit[gid] = 1;
                 usm_visit_mask[gid] = 0;
                 sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::system, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
-                usm_pipe[atomic_op_global.fetch_add(1)] = gid + Vstart;
+                usm_pipe[atomic_op_global.fetch_add(1)] = gid + Vstart[krnl_id];
               }
           }
 
@@ -369,7 +369,7 @@ std::cout <<"----------------------------------------"<< std::endl;
 
       Uint32* usm_pipe_global   = malloc_device<Uint32>(vertexCount, Queues[0]);
       int* DistanceDevice    = malloc_device<int>(h_distance.back().size(), Queues[0]); 
-
+      Uint32* usm_device_offsets   = malloc_device<Uint32>(h_visit_offsets.size(), Queues[0]);
     gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
       size_t offsetSize;
       size_t indexSize;
@@ -407,7 +407,7 @@ std::cout <<"----------------------------------------"<< std::endl;
 
 
 
-
+    copyToDevice(Queues[0],h_visit_offsets,usm_device_offsets);
     copyToDevice(Queues[0],h_pipe,usm_pipe_global);
     copyToDevice(Queues[0],h_distance[i],DistanceDevice);
 
@@ -433,7 +433,7 @@ std::cout <<"----------------------------------------"<< std::endl;
            Queues[gpuID].wait();
       });
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-            levelEvent[gpuID] =parallel_levelgen_kernel<gpuID>(Queues[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID],usm_visit_mask[gpuID],usm_visit[gpuID],iteration+1,usm_pipe_global,frontierCountDevice,DistanceDevice);
+            levelEvent[gpuID] =parallel_levelgen_kernel<gpuID>(Queues[gpuID],usm_device_offsets,h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID],usm_visit_mask[gpuID],usm_visit[gpuID],iteration+1,usm_pipe_global,frontierCountDevice,DistanceDevice);
       });
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
             Queues[gpuID].wait();
