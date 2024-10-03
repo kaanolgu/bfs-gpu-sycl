@@ -18,8 +18,8 @@ source ../spack/share/spack/setup-env.sh
 spack env activate -p environment
 
 rm -rf build
-cmake -Bbuild-spack -H.  -DENABLE_NVIDIA=ON -DCUDA_ARCH=80 -DGPU_TARGETS=all -DENABLE_VERBOSE=OFF
-cmake --build build-spack
+cmake -Bbuild -H.  -DENABLE_NVIDIA=ON -DCUDA_ARCH=80 -DGPU_TARGETS=all -DENABLE_VERBOSE=OFF
+cmake --build build
 ```
 
 # RUN 
