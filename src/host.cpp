@@ -72,7 +72,7 @@ int main(int argc, char * argv[])
 
 
   parser.printArguments();
-
+      std::cout << std::setw(20) << std::left << "- num_gpu" << std::setw(20) << NUM_GPU << std::endl;
 
 
 	std::vector<Uint32> old_buffer_size_meta(1,0);
@@ -91,8 +91,8 @@ int main(int argc, char * argv[])
   int numRows   = graph_cpu.meta[0];  // this it the value we want! (rows)
       std::cout << std::setw(20) << std::left << "- # vertices" << std::setw(20) << numRows << std::endl;
       std::cout << std::setw(20) << std::left << "- # edges" << std::setw(20) << numEdges << std::endl;
+      std::cout << std::setw(20) << std::left << "- dataset" << std::setw(20) << "Load [OK]" << std::endl;
       std::cout <<"----------------------------------------"<< std::endl;
-  std::cout << "[SUCCESS]\t" << datasetName << " with " << NUM_GPU << " partitions loaded" << std::endl;
   // Sanity Check if we loaded the graph properly
   assert(numRows <= numCols);
 

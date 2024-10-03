@@ -1,6 +1,6 @@
 using namespace sycl;
  using namespace std::chrono;
-#include <oneapi/dpl/utility> // to get std:: libraries working here: 
+// #include <oneapi/dpl/utility> // to get std:: libraries working here: 
 // https://oneapi-src.github.io/oneDPL/api_for_sycl_kernels/tested_standard_cpp_api.html
 #include <math.h>
 #include <iostream>
@@ -210,15 +210,12 @@ event parallel_explorer_kernel(queue &q,
           }  else {
               local_th_deg = 0;
           }
-
           // 2. Cumulative sum of total number of nonzeros 
           Uint32 total_nnz = reduce_over_group(item.get_group(), local_th_deg, sycl::plus<>());
           Uint32 length = (V < gid - lid + blockDim) ? (V - (gid -lid)) : blockDim;
           // 3. Exclusive sum of degrees to find total work items per block.
-            if(total_nnz > 0){
-              degrees[lid] = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg, sycl::plus<>());
-            }
-            // the exclusive scan over group does not sync the results so group_barrier is needed here
+          degrees[lid] = sycl::exclusive_scan_over_group(item.get_group(), local_th_deg, sycl::plus<>());
+          // the exclusive scan over group does not sync the results so group_barrier is needed here
           sycl::group_barrier(item.get_group());
     for (int i = lid;            // threadIdx.x
         i < total_nnz;  // total degree to process
@@ -297,7 +294,7 @@ return e;
           
 
 //----------------------------------------------------------
-//--breadth first search on FPGA
+//--breadth first search on GPU
 //----------------------------------------------------------
 // This function instantiates the vector add kernel, which contains
 // a loop that adds up the two summand arrays and stores the result
@@ -326,7 +323,8 @@ void GPURun(int vertexCount,
   // }
 
   std::vector<sycl::queue> Queues;
-  std::transform(Devs.begin(), Devs.end(), std::back_inserter(Queues),
+  // Insert not all devices only the required ones for model
+  std::transform(Devs.begin(), Devs.begin() + NUM_GPU, std::back_inserter(Queues),
                  [](const sycl::device &D) { return sycl::queue{D,sycl::property::queue::enable_profiling{}}; });
   ////////////////////////////////////////////////////////////////////////
   if (Devs.size() > 1){

@@ -56,7 +56,7 @@ public:
     // Method to print all arguments in a formatted table
     void printArguments() const {
         for (const auto& pair : arguments) {
-            std::cout << std::setw(20) << std::left << "-" + pair.first
+            std::cout << std::setw(20) << std::left << "- " + pair.first
                       << std::setw(20) << pair.second << std::endl;
         }
     }
