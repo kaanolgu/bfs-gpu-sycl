@@ -6,7 +6,7 @@ set(TARGET_NAME bfs)
 option(ENABLE_NVIDIA_BACKEND "Enable the NVIDIA backend" OFF)
 option(ENABLE_AMD_BACKEND "Enable the AMD backend" OFF)
 option(ENABLE_VERBOSE "Enable the verbose version of the execution" OFF)
-
+set(LOCAL_WORK_SIZE 1024 CACHE STRING "Define LWS for the architecture")
 
 
 # endif()
@@ -55,6 +55,7 @@ foreach(GPU_NUMBER IN LISTS GPU_TARGET_LIST)
     target_include_directories(${GPU_TARGET} PUBLIC ${PROJECT_SOURCE_DIR}/include)
     target_include_directories(${GPU_TARGET} PUBLIC ${PROJECT_SOURCE_DIR}/src)
     target_compile_definitions(${GPU_TARGET} PUBLIC NUM_GPU=${GPU_NUMBER})
+    target_compile_definitions(${GPU_TARGET} PUBLIC LOCAL_WORK_SIZE=${LOCAL_WORK_SIZE})
     target_compile_definitions(${GPU_TARGET} PUBLIC VERBOSE=$<IF:$<BOOL:${ENABLE_VERBOSE}>,1,0>)
     set_target_properties(${GPU_TARGET} PROPERTIES COMPILE_FLAGS "${COMPILE_LINK_FLAGS}")
     set_target_properties(${GPU_TARGET} PROPERTIES LINK_FLAGS "${COMPILE_LINK_FLAGS}")

@@ -33,14 +33,9 @@ using namespace sycl;
 // +------------------------+
 
 
-// Intel Compatibility Tool (aka c2s)
-// #include <dpct/dpct.hpp>
-// #include <dpct/rng_utils.hpp>
-// #include <dpct/dpl_utils.hpp>
 #include <sycl/sycl.hpp>
 // This function returns a vector of two (not necessarily distinct) devices,
 // allowing computation to be split across said devices.
-#define THREADS_PER_BLOCK 1024
 
 void printExecutionTimes(const std::vector<double>& execution_timesA, const std::vector<double>& execution_timesB) {
     const int NUM_TIMES = execution_timesA.size();
@@ -182,7 +177,7 @@ event parallel_explorer_kernel(queue &q,
 
 
       // Define the work-group size and the number of work-groups
-      const size_t local_size = THREADS_PER_BLOCK;  // Number of work-items per work-group
+      const size_t local_size = LOCAL_WORK_SIZE;  // Number of work-items per work-group
       const size_t global_size = ((V + local_size - 1) / local_size) * local_size;
 
       // Setup the range
@@ -251,7 +246,7 @@ event parallel_levelgen_kernel(queue &q,
                                 int* usm_dist
                                  ){
    // Define the work-group size and the number of work-groups
-    const size_t local_size = THREADS_PER_BLOCK;  // Number of work-items per work-group
+    const size_t local_size = LOCAL_WORK_SIZE;  // Number of work-items per work-group
     const size_t global_size = ((Vsize + local_size - 1) / local_size) * local_size;
 
     // Setup the range
