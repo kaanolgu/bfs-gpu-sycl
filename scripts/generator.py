@@ -7,6 +7,8 @@ from scipy import sparse
 from numpy import inf
 import numpy as np
 import networkx as nx
+import scipy.sparse as sparse
+import mmap
 # initialize access to UF SpM collection
 # import yaUFget as uf
 def round8(a):
@@ -107,13 +109,13 @@ def buildGraphManager(c,pick):
         print ("Graph " + g + " with " + str(c) + " partitions")
         m.prepareGraph(g, c,False,pick)
       
-def buildGraphManagerSingle(name, pick):
+def buildGraphManagerSingle(name, pick,num_vertices):
     g = name
     m = GraphMatrix()
 
 
     # Load the graph once outside the loop
-    graph = loadGraphFromBinary(localtxtFolder + g + ".bin")
+    graph = loadGraphFromBinary(localtxtFolder + g + ".bin",num_vertices)
     print("PATH : ", localtxtFolder + g + ".bin")
 
     # Call prepareGraph with the loaded graph for each partition count
@@ -281,11 +283,7 @@ def count_comment_lines(filepath, comment_chars=['%', '%%']):
                 break
     return comment_line_count
 
-import struct
-import os
-import numpy as np
-import scipy.sparse as sparse
-def loadGraphFromBinary(bin_filename):
+def loadGraphFromBinary(bin_filename,num_vertices):
     """
     Load a graph from a binary file containing packed edges (128 bits per edge) and build a CSR matrix.
     Each edge is represented by two vertices, each occupying 64 bits.
@@ -302,28 +300,33 @@ def loadGraphFromBinary(bin_filename):
         total_edges = file_size // 16
         print(f"Total number of edges: {total_edges}")
 
-        # Initialize lists to hold source and destination vertices
-        sources = []
-        destinations = []
+        # Create an empty lil_matrix for efficient incremental updates
+        csr_matrix = sparse.lil_matrix((num_vertices, num_vertices), dtype=np.uint8)
+ 
+        # Define chunk size (e.g., 1 GB at a time)
+        chunk_size = 1 * 1024**3  # 1 GB
+        edges_per_chunk = chunk_size // 16  # Each edge is 16 bytes
+        counter = 0
 
-        # Open the binary file for reading
-        with open(bin_filename, 'rb') as bin_file:
+        # Open the file using os.open for faster I/O
+        fd = os.open(bin_filename, os.O_RDONLY)
+        try:
             while True:
-                # Read 16 bytes from the binary file (8 bytes per vertex)
-                packed_data = bin_file.read(16)
-                if len(packed_data) < 16:
+                # Read a chunk of data
+                chunk = os.read(fd, edges_per_chunk * 16)
+                if not chunk:
                     break
-                
-                # Unpack the 16 bytes into two 64-bit unsigned integers
-                v0, v1 = struct.unpack('<QQ', packed_data)
 
-                # Append the vertices to the lists
-                sources.append(v0)
-                destinations.append(v1)
-        
-        # Create a CSR matrix from the edge list
-        data = np.ones(len(sources), dtype=int)
-        csr_matrix = sparse.csr_matrix((data, (sources, destinations)))
+                # Convert the chunk into an array of vertex pairs
+                edges = np.frombuffer(chunk, dtype=np.uint64).reshape(-1, 2)
+
+                # Incrementally update the lil_matrix
+                for v0, v1 in edges:
+                    csr_matrix[v0, v1] = 1
+        finally:
+            os.close(fd)
+        # Convert the lil_matrix to csr_matrix for efficient operations
+        csr_matrix = csr_matrix.tocsr()
 
         # Ensure the matrix is square by clipping if needed
         rows, cols = csr_matrix.shape
@@ -385,9 +388,10 @@ if __name__ == '__main__':
         #     print(emp_num)
     else:
         dataset_name = sys.argv[1]
-        # num_partition = int(sys.argv[2])
+        scale = int(sys.argv[3])
+        num_vertices = 2**(scale)
         partition_mode = sys.argv[2] ## nnz or row
-        buildGraphManagerSingle(dataset_name,partition_mode)
+        buildGraphManagerSingle(dataset_name,partition_mode,num_vertices)
         # print("======== Generate Root Nodes =======")
         # emp_num = dict()
         # emp_num = buildRootNodesSingle(sys.argv[1],2)
