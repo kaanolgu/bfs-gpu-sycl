@@ -7,8 +7,6 @@ from scipy import sparse
 from numpy import inf
 import numpy as np
 import networkx as nx
-import scipy.sparse as sparse
-import mmap
 # initialize access to UF SpM collection
 # import yaUFget as uf
 def round8(a):
@@ -109,14 +107,14 @@ def buildGraphManager(c,pick):
         print ("Graph " + g + " with " + str(c) + " partitions")
         m.prepareGraph(g, c,False,pick)
       
-def buildGraphManagerSingle(name, pick,num_vertices):
+def buildGraphManagerSingle(name, pick):
     g = name
     m = GraphMatrix()
 
 
     # Load the graph once outside the loop
-    graph = loadGraphFromBinary(localtxtFolder + g + ".bin",num_vertices)
-    print("PATH : ", localtxtFolder + g + ".bin")
+    graph = loadGraph(g)
+    print("PATH : ", localtxtFolder + g + ".txt")
 
     # Call prepareGraph with the loaded graph for each partition count
     for num_partition in num_cu:
@@ -203,11 +201,8 @@ class GraphMatrix:
 
 
 
-    # Update the prepareGraph function to accept a preloaded graph
     def prepareGraph(self, graphName, partitionCount, graph, csr, pick):
-        startAddr = dramBase
-        # print(graph)
-        if csr:
+        if (csr):
             graphName += "-" + pick + "-csr"
         else:
             graphName += "-" + pick + "-csc"
@@ -217,22 +212,22 @@ class GraphMatrix:
         graphName = graphName.replace("/", "-")
 
         # create the graph partitions
+        # 
+        # creating list
         partitions = []
-        if pick == "row":
-            partitions = rowSplit(graph, partitionCount)
+        if(pick == "row"):
+            partitions = rowSplit(graph,partitionCount)
         elif pick == "nnz":
-            partitions = nnzSplit(graph, partitionCount)
-
+            partitions = nnzSplit(graph,partitionCount)
         # add subfolder with name and part count
         targetDir = graphDataRoot + graphName + "-" + str(partitionCount)
         # create the target dir if it does not exist
         if not os.path.exists(targetDir):
             os.makedirs(targetDir)
-
         # serialize the graph data and build commands
         i = 0
 
-        # struct.pack converts integer("I") to binary
+#struct.pack converts integer("I") to binary
         startRow = 0
         startAddr = 0
         savedRows = 0
@@ -241,15 +236,15 @@ class GraphMatrix:
 
         for i in range(0, partitionCount):
             # savedRows = break_idx[i]
-            print("\nPartition " + str(i))
+            print ("Partition " + str(i))
             # write the metadata base ptr into
-            if csr:
+            if (csr):
                 res = self.serializeGraphData(partitions[i], graphName + "-" + str(i),
-                                            targetDir, startAddr, startRow, i, savedRows)
+                                              targetDir, startAddr, startRow,i,savedRows)
             else:
                 res = self.serializeGraphData(partitions[i], graphName + "-" + str(i),
-                                            targetDir, startAddr, startRow, i, savedRows)
-
+                                              targetDir, startAddr, startRow,i,savedRows)
+            
             # print(startRow)
             startAddr = res[1]
             savedRows += res[0]
@@ -257,16 +252,20 @@ class GraphMatrix:
             metaDataFile.write(struct.pack("I", partitions[i].shape[1]))
             metaDataFile.write(struct.pack("I", partitions[i].nnz))
             metaDataFile.write(struct.pack("I", startRow))
-            # update start row
-            startRow += partitions[i].shape[0]
-
+            #update start row
+            startRow += partitions[i].shape[0]  
+            
+            # print("saved rows : ", savedRows)
+      
+            # i += 1
+        
         metaDataFile.close()
-        print("Graph " + graphName + " prepared with " + str(partitionCount) + " partitions")
+        print ("Graph " + graphName + " prepared with " + str(partitionCount) + " partitions")
         if csr:
             print("Matrix stored in row-major format")
         else:
-            print("Matrix stored in col-major format")
-        print("All data is located in " + targetDir + "\n")
+            print ("Matrix stored in col-major format")
+        print ("All data is located in " + targetDir + "\n")
 
         self.graphName = graphName
 # Function to count comment lines
@@ -283,64 +282,56 @@ def count_comment_lines(filepath, comment_chars=['%', '%%']):
                 break
     return comment_line_count
 
-def loadGraphFromBinary(bin_filename,num_vertices):
-    """
-    Load a graph from a binary file containing packed edges (128 bits per edge) and build a CSR matrix.
-    Each edge is represented by two vertices, each occupying 64 bits.
+def loadGraph(matrix):
+    name_matrix = str(matrix) + '.txt'
+    path_to_go = localtxtFolder + name_matrix
+    
+    # print(path_to_go)
+    if scipy.sparse.isspmatrix_csc(matrix) or scipy.sparse.isspmatrix_csr(matrix):
+        # return already loaded matrix
+        r = removeSelfEdges(matrix)
+        # do not adjust dimensions, return directly
+        return r
+    else:
+        # load matrix from local file system
+        # r = scipy.io.loadmat(path_to_go)['M']
+        # List of target filenames with mtx format
+        file_names_from_mtx = [
+            "webbase-1M.txt",
+            "kron_g500-logn21.txt",
+            "indochina-2004.txt",
+            "hollywood-2009.txt",
+            "europe_osm.txt"
+        ]
 
-    Parameters:
-    - bin_filename: The input binary file containing packed edges.
+        # Check if path_to_go matches any of the filenames
+        if name_matrix in file_names_from_mtx:
+            print(f"{path_to_go} is in the list of target filenames.")
+            # Count the number of comment lines
+            num_comment_lines = count_comment_lines(path_to_go)
 
-    Returns:
-    - A scipy.sparse CSR matrix representing the graph.
-    """
-    try:
-        # Get the total number of edges
-        file_size = os.path.getsize(bin_filename)
-        total_edges = file_size // 16
-        print(f"Total number of edges: {total_edges}")
-
-        # Create an empty lil_matrix for efficient incremental updates
-        csr_matrix = sparse.lil_matrix((num_vertices, num_vertices), dtype=np.uint8)
- 
-        # Define chunk size (e.g., 1 GB at a time)
-        chunk_size = 1 * 1024**3  # 1 GB
-        edges_per_chunk = chunk_size // 16  # Each edge is 16 bytes
-        counter = 0
-
-        # Open the file using os.open for faster I/O
-        fd = os.open(bin_filename, os.O_RDONLY)
-        try:
-            while True:
-                # Read a chunk of data
-                chunk = os.read(fd, edges_per_chunk * 16)
-                if not chunk:
-                    break
-
-                # Convert the chunk into an array of vertex pairs
-                edges = np.frombuffer(chunk, dtype=np.uint64).reshape(-1, 2)
-
-                # Incrementally update the lil_matrix
-                for v0, v1 in edges:
-                    csr_matrix[v0, v1] = 1
-        finally:
-            os.close(fd)
-        # Convert the lil_matrix to csr_matrix for efficient operations
-        csr_matrix = csr_matrix.tocsr()
-
-        # Ensure the matrix is square by clipping if needed
-        rows, cols = csr_matrix.shape
-        if rows != cols:
-            dim = min(rows, cols)
-            csr_matrix = csr_matrix[0:dim, 0:dim]
-
-        return csr_matrix
-    except FileNotFoundError:
-        print(f"Error: The file '{bin_filename}' was not found.")
-    except Exception as e:
-        print(f"An error occurred: {e}")
-
-
+            # Load the data using numpy.loadtxt
+            arr = np.loadtxt(path_to_go, dtype=int, comments='%', skiprows=num_comment_lines + 1)
+        else:
+            arr = np.loadtxt(path_to_go, dtype=int,comments=['#', '$'])
+        # print(r)
+        # print(arr)
+    # else:
+    # load matrix from University of Florida sparse matrix collection
+    # r=removeSelfEdges(uf.get(matrix)['A'])
+    # graph must have rows==cols, clip matrix if needed
+   
+    test = np.ones((len(arr[:, 0]),), dtype=int)
+    arr = sparse.csr_matrix(((test,((arr[:, 0],(arr[:, 1]))))))
+    #print r
+    rows = arr.shape[0]
+    cols = arr.shape[1]
+    # print(rows)
+    #print cols
+    if rows != cols:
+        dim = min(rows, cols)
+        arr = arr[0:dim, 0:dim]
+    return arr
 
 
 # Slice matrix along rows to create desired number of partitions
@@ -388,10 +379,8 @@ if __name__ == '__main__':
         #     print(emp_num)
     else:
         dataset_name = sys.argv[1]
-        scale = int(sys.argv[3])
-        num_vertices = 2**(scale)
         partition_mode = sys.argv[2] ## nnz or row
-        buildGraphManagerSingle(dataset_name,partition_mode,num_vertices)
+        buildGraphManagerSingle(dataset_name,partition_mode)
         # print("======== Generate Root Nodes =======")
         # emp_num = dict()
         # emp_num = buildRootNodesSingle(sys.argv[1],2)
