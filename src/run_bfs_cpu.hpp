@@ -26,12 +26,15 @@ void run_bfs_cpu(int no_of_nodes,
         h_graph_mask[tid]=0;
         exploredEdgesCount += source_indptr[tid+1] - source_indptr[tid];
 #if VERBOSE == 1  
-        for (int j = 0; j < NUM_GPU + 1; ++j) {
-            if (tid >= h_visit_offsets[j] && tid < h_visit_offsets[j + 1]) {
-                Edgecounts[j] += source_indptr[tid+1] - source_indptr[tid];  // Increment the count for the corresponding range
-                Nodecounts[j] += 1;
-                break;  // Exit the inner loop once the correct range is found
-            }
+      for(int i=source_indptr[tid]; i<(source_indptr[tid+1]); i++){
+                int id = source_inds[i];
+                for (int j = 0; j < NUM_GPU + 1; ++j) {
+                  if (id >= h_visit_offsets[j] && id < h_visit_offsets[j + 1]) {
+                    Edgecounts[j] += 1;  // Increment the count for the corresponding range
+                    Nodecounts[j] += 1;
+                    break;  // Exit the inner loop once the correct range is found
+                  }
+                }
         }
 #endif
         for(int i=source_indptr[tid]; i<(source_indptr[tid+1]); i++){
