@@ -133,7 +133,7 @@ void copyToHost(queue &Q, T *usm_arr,std::vector<T> &arr){
 double GetExecutionTime(const event &e) {
   double start_k = e.get_profiling_info<info::event_profiling::command_start>();
   double end_k = e.get_profiling_info<info::event_profiling::command_end>();
-  double kernel_time = (end_k - start_k) * 1e-9; // ns to s
+  double kernel_time = (end_k - start_k) * 1e-6; // ns to ms
   return kernel_time;
 }
 
@@ -364,7 +364,6 @@ std::cout <<"----------------------------------------"<< std::endl;
 
       Uint32* usm_pipe_global   = malloc_device<Uint32>(vertexCount, Queues[0]);
       int* DistanceDevice    = malloc_device<int>(h_distance.back().size(), Queues[0]); 
-      Uint32* usm_device_offsets   = malloc_device<Uint32>(h_visit_offsets.size(), Queues[0]);
     gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
       size_t offsetSize;
       size_t indexSize;
@@ -402,7 +401,7 @@ std::cout <<"----------------------------------------"<< std::endl;
 
 
 
-    copyToDevice(Queues[0],h_visit_offsets,usm_device_offsets);
+
     copyToDevice(Queues[0],h_pipe,usm_pipe_global);
     copyToDevice(Queues[0],h_distance[i],DistanceDevice);
 
@@ -492,13 +491,13 @@ std::cout <<"----------------------------------------"<< std::endl;
     // Output the filtered data in a formatted table
    
     std::cout <<"\n----------------------------------------"<< std::endl;
-
-    double total_time = std::accumulate(run_times.begin(), run_times.end(), 0.0) / run_times.size();
+    double total_exec_time = std::accumulate(run_times.begin(), run_times.end(), 0.0);
+    double avg_time = std::accumulate(run_times.begin(), run_times.end(), 0.0) / run_times.size();
     double total_time_filtered = std::accumulate(filteredData.begin(), filteredData.end(), 0.0) / filteredData.size();
     double minimum_time_filtered = *std::min_element(filteredData.begin(), filteredData.end());
     double total_time_90f = std::accumulate(filteredDataNOF.begin(), filteredDataNOF.end(), 0.0) / filteredDataNOF.size();
     double minimum_time_90f = *std::min_element(filteredDataNOF.begin(), filteredDataNOF.end());
-    
+
     // Print events and execution times
     printRow("Average (filtered) Time:", formatDouble(total_time_filtered)+ " (ms)");
     printRow("Minimum (filtered) Time:", formatDouble(minimum_time_filtered)+ " (ms)");
@@ -506,16 +505,16 @@ std::cout <<"----------------------------------------"<< std::endl;
     printRow("Average (90%) Time:", formatDouble(total_time_90f)+ " (ms)");
     printRow("Minimum (90%) Time:", formatDouble(minimum_time_90f)+ " (ms)");
     
-    printRow("Average Execution Time:", formatDouble(total_time) + " (ms)");
- 
+    printRow("Average Execution Time:", formatDouble(avg_time) + " (ms)");
+    printRow("Total Execution Time:", formatDouble(total_exec_time) + " (ms)");
 
     newJsonObj["rawExecutionTimeAll"] = run_times;
-    newJsonObj["avgExecutionTime"] = total_time;
+    newJsonObj["avgExecutionTime"] = avg_time;
     newJsonObj["avgExecutionTimeFiltered"] = total_time_filtered;
     newJsonObj["minExecutionTimeFiltered"] = minimum_time_filtered;
     newJsonObj["avgExecutionTime90f"] = total_time_90f;
     newJsonObj["minExecutionTime90f"] = minimum_time_90f;
- 
+    newJsonObj["totalExecutionTime"] = total_exec_time;
     // The queue destructor is invoked when q passes out of scope.
     // q's destructor invokes q's exception handler on any device exceptions.
   }
