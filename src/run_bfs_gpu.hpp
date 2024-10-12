@@ -138,20 +138,6 @@ double GetExecutionTime(const event &e) {
 }
 
 
-template <typename T>
-int upper_bound(const sycl::local_accessor<T> &arr, int n, int value) {
-    int start = 0;
-    int i;
-    while (start < n) {
-        i = start + (n - start) / 2;
-        if (value < arr[i]) {
-            n = i;
-        } else {
-            start = i + 1;
-        }
-    } // end while
-    return start;
-}
 
 //-------------------------------------------------------------------
 //-- initialize Kernel for Exploring the neighbours of next to visit 
@@ -187,6 +173,7 @@ event parallel_explorer_kernel(queue &q,
             // Local memory for exclusive sum, shared within the work-group
             sycl::local_accessor<Uint32> edge_pointer(local_size, h);
             sycl::local_accessor<Uint32> degrees(local_size, h);
+
           h.parallel_for<class ExploreNeighbours<krnl_id>>(range, [=](nd_item<1> item) {
             const int gid = item.get_global_id(0);    // global id
             const int lid  = item.get_local_id(0); // threadIdx.x
@@ -211,19 +198,32 @@ event parallel_explorer_kernel(queue &q,
           degrees[lid] = sycl::exclusive_scan_over_group(item.get_group(), local_node_deg, sycl::plus<>());
           // the exclusive scan over group does not sync the results so group_barrier is needed here
           sycl::group_barrier(item.get_group());
+
+    // 4. Using grid stride loop with binary search to find the corresponding edges 
     for (int i = lid;            // threadIdx.x
         i < total_nnz;  // total degree to process
         i += blockDim    // increment by blockDim.x
     ) {
 
-      // 4. Using grid stride loop with binary search to find the corresponding edges 
-      Uint32 it = upper_bound(degrees,length, i);
-      Uint32 id =  it - 1;
+      // Uint32 it = upper_bound(degrees,length, i);
+    Uint32 start = 0;
+    Uint32 temp_length = length;
+    int ii;
+    while (start < temp_length) {
+        ii = start + (temp_length - start) / 2;
+        if (i < degrees[ii]) {
+            temp_length = ii;
+        } else {
+            start = ii + 1;
+        }
+    } // end while
+      Uint32 id =  start - 1;
       Uint32  e = edge_pointer[id] + i  - degrees[id]; 
       Uint32  n  = usm_edges[e];   
-      if(!usm_visit[n- Vstart])
-      usm_visit_mask[n - Vstart] = 1;
-      
+      if(!usm_visit[n- Vstart]){
+        usm_visit_mask[n - Vstart] = 1;
+        usm_visit[n- Vstart] = 1;
+      }
     } 
           
       });
@@ -248,7 +248,7 @@ event parallel_levelgen_kernel(queue &q,
    // Define the work-group size and the number of work-groups
     const size_t local_size = LOCAL_WORK_SIZE;  // Number of work-items per work-group
     const size_t global_size = ((Vsize + local_size - 1) / local_size) * local_size;
-
+       
     // Setup the range
     nd_range<1> range(global_size, local_size);
         auto e = q.submit([&](handler& h) {
@@ -258,8 +258,8 @@ event parallel_levelgen_kernel(queue &q,
           if (gid < Vsize) {
               MyUint1 vmask = usm_visit_mask[gid];
               if(vmask == 1){
-                usm_dist[gid + Vstart] = level_plus_one;  
-                usm_visit[gid] = 1;
+                usm_dist[gid] = level_plus_one;  
+                // usm_visit[gid] = 1;
                 usm_visit_mask[gid] = 0;
                 sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::system, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
                 usm_pipe[atomic_op_global.fetch_add(1)] = gid + Vstart;
@@ -363,7 +363,7 @@ std::cout <<"----------------------------------------"<< std::endl;
       h_pipe[0] = sourceNode;
 
       Uint32* usm_pipe_global   = malloc_device<Uint32>(vertexCount, Queues[0]);
-      int* DistanceDevice    = malloc_device<int>(h_distance.back().size(), Queues[0]); 
+      int* usm_dist    = malloc_device<int>(h_distance.back().size(), Queues[0]); 
     gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
       size_t offsetSize;
       size_t indexSize;
@@ -403,7 +403,7 @@ std::cout <<"----------------------------------------"<< std::endl;
 
 
     copyToDevice(Queues[0],h_pipe,usm_pipe_global);
-    copyToDevice(Queues[0],h_distance[i],DistanceDevice);
+    copyToDevice(Queues[0],h_distance[i],usm_dist);
 
 
 
@@ -427,7 +427,8 @@ std::cout <<"----------------------------------------"<< std::endl;
            Queues[gpuID].wait();
       });
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-            levelEvent[gpuID] =parallel_levelgen_kernel<gpuID>(Queues[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID],usm_visit_mask[gpuID],usm_visit[gpuID],iteration+1,usm_pipe_global,frontierCountDevice,DistanceDevice);
+
+            levelEvent[gpuID] =parallel_levelgen_kernel<gpuID>(Queues[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID],usm_visit_mask[gpuID],usm_visit[gpuID],iteration+1,usm_pipe_global,frontierCountDevice,usm_dist);
       });
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
             Queues[gpuID].wait();
@@ -458,7 +459,7 @@ std::cout <<"----------------------------------------"<< std::endl;
       // end_time = max(levelEvent.get_profiling_info<info::event_profiling::command_end>(),levelEventQ.get_profiling_info<info::event_profiling::command_end>());
       double total_time = (end_time - start_time)* 1e-6; // ns to ms
       run_times[i] = total_time;
-      copyToHost(Queues[0],DistanceDevice,h_distance[i]);
+      copyToHost(Queues[0],usm_dist,h_distance[i]);
       Queues[0].wait();
 
     gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
@@ -468,7 +469,7 @@ std::cout <<"----------------------------------------"<< std::endl;
           sycl::free(usm_visit_mask[gpuID], Queues[gpuID]);
     });
 
-    sycl::free(DistanceDevice, Queues[0]);
+    sycl::free(usm_dist, Queues[0]);
     sycl::free(usm_pipe_global, Queues[0]);
 
     } // for loop num_runs
