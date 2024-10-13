@@ -154,8 +154,8 @@ event parallel_explorer_kernel(queue &q,
                                 Uint32* usm_nodes_start,
                                 Uint32 *usm_edges,
                                 Uint32* usm_pipe_1,
-                                MyUint1 *usm_visit_mask,
-                                MyUint1 *usm_visit,
+                                Uint8 *usm_visit_mask,
+                                Uint8 *usm_visit,
                                 const Uint32 Vstart,
                                 const Uint32 Vsize)
     {
@@ -238,8 +238,8 @@ template <int krnl_id>
 event parallel_levelgen_kernel(queue &q,
                                 const Uint32 Vstart,
                                 const Uint32 Vsize,
-                                MyUint1 *usm_visit_mask,
-                                MyUint1 *usm_visit,
+                                Uint8 *usm_visit_mask,
+                                Uint8 *usm_visit,
                                 const int level_plus_one,
                                 Uint32 *usm_pipe,
                                 Uint32 *usm_pipe_size,
@@ -256,10 +256,9 @@ event parallel_levelgen_kernel(queue &q,
             const int gid = item.get_global_id(0);    // global id
 
           if (gid < Vsize) {
-              MyUint1 vmask = usm_visit_mask[gid];
+              Uint8 vmask = usm_visit_mask[gid];
               if(vmask == 1){
                 usm_dist[gid + Vstart] = level_plus_one;  
-                // usm_visit[gid] = 1;
                 usm_visit_mask[gid] = 0;
                 sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::system, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
                 usm_pipe[atomic_op_global.fetch_add(1)] = gid + Vstart;
@@ -285,8 +284,8 @@ template<typename vectorT>
 void GPURun(int vertexCount, 
                   vectorT &IndexHost,
                   vectorT &OffsetHost,
-                  std::vector<MyUint1> &h_visit_mask,
-                  std::vector<MyUint1> &h_visit,
+                  std::vector<Uint8> &h_visit_mask,
+                  std::vector<Uint8> &h_visit,
                   std::vector<std::vector<int>> &h_distance,
                   int sourceNode,const int num_runs,
                   nlohmann::json &newJsonObj,std::vector<Uint32> &h_visit_offsets) noexcept(false) {
@@ -351,8 +350,8 @@ std::cout <<"----------------------------------------"<< std::endl;
     int zero = 0;
     std::vector<Uint32*> OffsetDevice(NUM_GPU);
     std::vector<Uint32*> EdgesDevice(NUM_GPU);
-    std::vector<MyUint1*> usm_visit_mask(NUM_GPU);
-    std::vector<MyUint1*> usm_visit(NUM_GPU);
+    std::vector<Uint8*> usm_visit_mask(NUM_GPU);
+    std::vector<Uint8*> usm_visit(NUM_GPU);
     std::vector<Uint32> h_pipe(vertexCount,0);
     std::vector<Uint32> h_pipe_count(1,1);
 
@@ -378,8 +377,8 @@ std::cout <<"----------------------------------------"<< std::endl;
 
       OffsetDevice[gpuID]        = malloc_device<Uint32>(offsetSize, Queues[gpuID]);
       EdgesDevice[gpuID]     = malloc_device<Uint32>(indexSize, Queues[gpuID]); 
-      usm_visit_mask[gpuID]    = malloc_device<MyUint1>((h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID]), Queues[gpuID]); 
-      usm_visit[gpuID]    = malloc_device<MyUint1>((h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID]), Queues[gpuID]); 
+      usm_visit_mask[gpuID]    = malloc_device<Uint8>((h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID]), Queues[gpuID]); 
+      usm_visit[gpuID]    = malloc_device<Uint8>((h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID]), Queues[gpuID]); 
 
 
       if constexpr (std::is_same_v<vectorT, std::vector<Uint32>>) {
@@ -390,8 +389,8 @@ std::cout <<"----------------------------------------"<< std::endl;
           copyToDevice(Queues[gpuID],OffsetHost[gpuID],OffsetDevice[gpuID]);
       }
   
-      Queues[0].memcpy(usm_visit_mask[gpuID], h_visit_mask.data() + h_visit_offsets[gpuID],(h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID])* sizeof(MyUint1));
-      Queues[0].memcpy(usm_visit[gpuID], h_visit.data() + h_visit_offsets[gpuID], (h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID])* sizeof(MyUint1));
+      Queues[0].memcpy(usm_visit_mask[gpuID], h_visit_mask.data() + h_visit_offsets[gpuID],(h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID])* sizeof(Uint8));
+      Queues[0].memcpy(usm_visit[gpuID], h_visit.data() + h_visit_offsets[gpuID], (h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID])* sizeof(Uint8));
 
     });
     Uint32 *frontierCountDevice = malloc_device<Uint32>(1, Queues[0]);

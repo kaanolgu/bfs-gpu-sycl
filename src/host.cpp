@@ -86,9 +86,9 @@ int main(int argc, char * argv[])
   CSRGraph graph = loadMatrix(NUM_GPU,datasetName);
   CSRGraph graph_cpu = loadMatrix(1,datasetName);
 
-  int numCols = graph_cpu.meta[1];  // cols -> total number of vertices
-  int numEdges  = graph_cpu.meta[2];  // nonZ count -> total edges
-  int numRows   = graph_cpu.meta[0];  // this it the value we want! (rows)
+  Uint32 numCols = graph_cpu.meta[1];  // cols -> total number of vertices
+  Uint64 numEdges  = graph_cpu.meta[2];  // nonZ count -> total edges
+  Uint32 numRows   = graph_cpu.meta[0];  // this it the value we want! (rows)
       std::cout << std::setw(20) << std::left << "- # vertices" << std::setw(20) << numRows << std::endl;
       std::cout << std::setw(20) << std::left << "- # edges" << std::setw(20) << numEdges << std::endl;
       std::cout << std::setw(20) << std::left << "- dataset" << std::setw(20) << "Load [OK]" << std::endl;
@@ -102,8 +102,8 @@ int main(int argc, char * argv[])
   h_dist[start_vertex]=0; 
   std::vector<std::vector<int>> h_distancesGPU(num_runs,h_dist);
   std::vector<Uint32> h_graph_nodes_start;
-  std::vector<MyUint1> h_updating_graph_mask(numCols,0);
-  std::vector<MyUint1> h_graph_visited(numCols,0); 
+  std::vector<Uint8> h_updating_graph_mask(numCols,0);
+  std::vector<Uint8> h_graph_visited(numCols,0); 
 
   
   h_graph_visited[start_vertex]=1;
@@ -122,7 +122,7 @@ int main(int argc, char * argv[])
 
 
   #if VERBOSE ==1 
-for( int i =0; i < h_visit_offsets.size(); i++)
+for( Uint32 i =0; i < h_visit_offsets.size(); i++)
 std::cout << "- GPU[" << std::to_string(i) << "] OFFSET:\t" << h_visit_offsets[i] << std::endl;
 std::cout <<"----------------------------------------"<< std::endl;
 #endif

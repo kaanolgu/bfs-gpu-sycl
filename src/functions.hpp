@@ -5,7 +5,7 @@
 
 using MyUint1 = unsigned char; 
 using Uint32 = unsigned int;
-
+using Uint64 = unsigned long;
 
 
 
