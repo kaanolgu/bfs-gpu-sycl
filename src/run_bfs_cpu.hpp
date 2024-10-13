@@ -4,17 +4,17 @@
 //----------------------------------------------------------
 //---------------------------------------------------------- CPU COMPUTATION
 void run_bfs_cpu(int no_of_nodes,
-  std::vector<Uint32> &source_indptr,
-  std::vector<Uint32>&source_inds, 
-  std::vector<Uint32>&h_graph_mask,
-  std::vector<Uint32>&h_updating_graph_mask, 
-  std::vector<Uint32>&fpga_visited,
+  std::vector<uint32_t> &source_indptr,
+  std::vector<uint32_t>&source_inds, 
+  std::vector<uint32_t>&h_graph_mask,
+  std::vector<uint32_t>&h_updating_graph_mask, 
+  std::vector<uint32_t>&fpga_visited,
   std::vector<int> &h_cost_ref,
   nlohmann::json &newJsonObj,
-  std::vector<Uint32> &h_visit_offsets,
+  std::vector<uint32_t> &h_visit_offsets,
     std::vector<DeviceInfo> &host_run_statistics){
   char stop;
-  Uint32 exploredEdgesCount = 0;
+  uint32_t exploredEdgesCount = 0;
   std::vector<int> Edgecounts(NUM_GPU, 0);
   std::vector<int> Nodecounts(NUM_GPU, 0);
   do{

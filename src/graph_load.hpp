@@ -6,20 +6,20 @@
 // CSR structure to hold the graph
 struct CSRGraph {
     // Use single vectors for when partitionCount is 1
-    std::vector<Uint32> meta;
-    std::vector<Uint32> indptr;
-    std::vector<Uint32> inds;
+    std::vector<uint32_t> meta;
+    std::vector<uint32_t> indptr;
+    std::vector<uint32_t> inds;
 
     // Use vectors of vectors for when partitionCount is greater than 1
-    std::vector<std::vector<Uint32>> metaMulti;
-    std::vector<std::vector<Uint32>> indptrMulti;
-    std::vector<std::vector<Uint32>> indsMulti;
+    std::vector<std::vector<uint32_t>> metaMulti;
+    std::vector<std::vector<uint32_t>> indptrMulti;
+    std::vector<std::vector<uint32_t>> indsMulti;
 
     // Flag to check if we're using multi-dimensional vectors
     bool isMultiDimensional = false;
 };
 
-void readFromMM(const char *filename, std::vector<Uint32> &buffer) {
+void readFromMM(const char *filename, std::vector<uint32_t> &buffer) {
     #if VERBOSE == 1
     std::cout << "- Reading " << filename << "..." ;
     #endif
@@ -39,7 +39,7 @@ void readFromMM(const char *filename, std::vector<Uint32> &buffer) {
     }
 
     size_t originalSize = buffer.size();
-    buffer.resize(originalSize + fileSize / sizeof(Uint32));
+    buffer.resize(originalSize + fileSize / sizeof(uint32_t));
 
     file.read(reinterpret_cast<char *>(buffer.data() + originalSize), fileSize);
 #if VERBOSE == 1
@@ -47,7 +47,7 @@ void readFromMM(const char *filename, std::vector<Uint32> &buffer) {
     #endif
 }
 
-CSRGraph loadMatrix(Uint32 partitionCount, std::string datasetName) {
+CSRGraph loadMatrix(uint32_t partitionCount, std::string datasetName) {
     CSRGraph graph;
     #if VERBOSE == 1
     std::cout << "Loading matrix " << datasetName << " with " << partitionCount << " partitions..." << std::endl;
@@ -74,7 +74,7 @@ CSRGraph loadMatrix(Uint32 partitionCount, std::string datasetName) {
         graph.indptrMulti.resize(partitionCount);
         graph.indsMulti.resize(partitionCount);
 
-        for (Uint32 i = 0; i < partitionCount; i++) {
+        for (uint32_t i = 0; i < partitionCount; i++) {
             // std::string str_meta = non_switch + std::to_string(i) + "-meta.bin";
             std::string str_indptr = non_switch + std::to_string(i) + "-indptr.bin";
             std::string str_inds = non_switch + std::to_string(i) + "-inds.bin";
