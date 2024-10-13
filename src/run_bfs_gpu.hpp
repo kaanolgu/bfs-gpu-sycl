@@ -258,7 +258,7 @@ event parallel_levelgen_kernel(queue &q,
           if (gid < Vsize) {
               MyUint1 vmask = usm_visit_mask[gid];
               if(vmask == 1){
-                usm_dist[gid] = level_plus_one;  
+                usm_dist[gid + Vstart] = level_plus_one;  
                 // usm_visit[gid] = 1;
                 usm_visit_mask[gid] = 0;
                 sycl::atomic_ref<Uint32, sycl::memory_order::relaxed,sycl::memory_scope::system, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
