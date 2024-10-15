@@ -10,6 +10,8 @@ using namespace sycl;
 #include "functions.hpp"
 #include "unrolled_loop.hpp"
 #define MAX_NUM_LEVELS 100
+// TODO: replace with empirical factor determined at runtime
+#define EDGE_FACTOR 64
 
 
 // |  Memory Model Equivalence
@@ -156,6 +158,7 @@ event parallel_explorer_kernel(queue &q,
                                 uint32_t* usm_pipe_1,
                                 uint8_t *usm_visit_mask,
                                 uint8_t *usm_visit,
+                                uint32_t *usm_scan_group,
                                 const uint32_t Vstart,
                                 const uint32_t Vsize)
     {
@@ -164,10 +167,11 @@ event parallel_explorer_kernel(queue &q,
 
       // Define the work-group size and the number of work-groups
       const size_t local_size = LOCAL_WORK_SIZE;  // Number of work-items per work-group
-      const size_t global_size = ((V + local_size - 1) / local_size) * local_size;
+      const size_t global_size = ((V*EDGE_FACTOR + local_size - 1) / local_size) * local_size;
 
       // Setup the range
       nd_range<1> range(global_size, local_size);
+      //std::cout << "Distance " << std::distance(usm_scan_group, usm_scan_group+1024) << std::endl;
 
       auto e = q.submit([&](handler& h) {
             // Local memory for exclusive sum, shared within the work-group
@@ -175,9 +179,11 @@ event parallel_explorer_kernel(queue &q,
             sycl::local_accessor<uint32_t> degrees(local_size, h);
 
           h.parallel_for<class ExploreNeighbours<krnl_id>>(range, [=](nd_item<1> item) {
-            const int gid = item.get_global_id(0);    // global id
-            const int lid  = item.get_local_id(0); // threadIdx.x
-            const int blockDim  = item.get_local_range(0); // blockDim.x
+            const uint32_t gid = item.get_global_id(0);    // global id
+            const uint32_t lid  = item.get_local_id(0); // threadIdx.x
+            const uint32_t blockDim  = item.get_local_range(0); // blockDim.x
+            const uint32_t bid = item.get_group(0); // block id
+            const uint32_t grange = item.get_group_range(0);
 
             uint32_t v;
             uint32_t local_node_deg; // this variable is shared between workitems
@@ -193,11 +199,34 @@ event parallel_explorer_kernel(queue &q,
           }
           // 2. Cumulative sum of total number of nonzeros 
           uint32_t total_nnz = reduce_over_group(item.get_group(), local_node_deg, sycl::plus<>());
+          if (lid == 0){
+            usm_scan_group[item.get_group(0)] = total_nnz;
+          } 
+          // 2.A. once block sum is written here ... 
+          sycl::atomic_fence(sycl::memory_order::release, sycl::memory_scope::device);
+
           uint32_t length = (V < gid - lid + blockDim) ? (V - (gid -lid)) : blockDim;
           // 3. Exclusive sum of degrees to find total work items per block.
           degrees[lid] = sycl::exclusive_scan_over_group(item.get_group(), local_node_deg, sycl::plus<>());
           // the exclusive scan over group does not sync the results so group_barrier is needed here
           sycl::group_barrier(item.get_group());
+          // 3.A. ... we can proceed here to use it
+          sycl::atomic_fence(sycl::memory_order::acquire, sycl::memory_scope::device);
+
+          // 4. global memory scan in group 0
+          if(item.get_group(0) == 0){
+            sycl::joint_exclusive_scan(item.get_group(), 
+                                        usm_scan_group, 
+                                        usm_scan_group+V/blockDim, 
+                                        usm_scan_group, 
+                                        sycl::plus<>());
+          }
+          /*sycl::joint_exclusive_scan(item.get_group(), 
+                                      usm_scan_group.get_multi_ptr<sycl::access::decorated::no>(), 
+                                      usm_scan_group.get_multi_ptr<sycl::access::decorated::no>()+grange, 
+                                      usm_scan_group.get_multi_ptr<sycl::access::decorated::no>(), 
+                                      sycl::plus<>());*/
+          sycl::atomic_fence(sycl::memory_order::acq_rel, sycl::memory_scope::device);
 
     // 4. Using grid stride loop with binary search to find the corresponding edges 
     for (int i = lid;            // threadIdx.x
@@ -352,6 +381,7 @@ std::cout <<"----------------------------------------"<< std::endl;
     std::vector<uint32_t*> EdgesDevice(NUM_GPU);
     std::vector<uint8_t*> usm_visit_mask(NUM_GPU);
     std::vector<uint8_t*> usm_visit(NUM_GPU);
+    std::vector<uint32_t*> ScanDevice(NUM_GPU);
     std::vector<uint32_t> h_pipe(vertexCount,0);
     std::vector<uint32_t> h_pipe_count(1,1);
 
@@ -379,7 +409,10 @@ std::cout <<"----------------------------------------"<< std::endl;
       EdgesDevice[gpuID]     = malloc_device<uint32_t>(indexSize, Queues[gpuID]); 
       usm_visit_mask[gpuID]    = malloc_device<uint8_t>((h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID]), Queues[gpuID]); 
       usm_visit[gpuID]    = malloc_device<uint8_t>((h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID]), Queues[gpuID]); 
-
+      const uint32_t scanSize = (vertexCount*EDGE_FACTOR + LOCAL_WORK_SIZE - 1) / LOCAL_WORK_SIZE;
+      ScanDevice[gpuID]   = malloc_device<uint32_t>(scanSize, Queues[gpuID]);
+      if(i==0)
+        std::cout << "Allocated " << scanSize << " elements for ScanDevice buffer." << std::endl;
 
       if constexpr (std::is_same_v<vectorT, std::vector<uint32_t>>) {
           copyToDevice(Queues[gpuID],IndexHost,EdgesDevice[gpuID]);
@@ -409,7 +442,7 @@ std::cout <<"----------------------------------------"<< std::endl;
 
     Queues[0].memcpy(frontierCountDevice, &zero, sizeof(uint32_t));  
  
-    
+
     double start_time = 0;
     double end_time = 0;
     for(int iteration=0; iteration < MAX_NUM_LEVELS; iteration++){
@@ -419,7 +452,7 @@ std::cout <<"----------------------------------------"<< std::endl;
        
 
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-              exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, usm_visit_mask[gpuID],usm_visit[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1]- h_visit_offsets[gpuID]);
+              exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, usm_visit_mask[gpuID],usm_visit[gpuID],ScanDevice[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1]- h_visit_offsets[gpuID]);
        
       });
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
@@ -444,6 +477,8 @@ std::cout <<"----------------------------------------"<< std::endl;
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
       explore_times[gpuID]     += GetExecutionTime(exploreEvent[gpuID]);
       levelgen_times[gpuID]     += GetExecutionTime(levelEvent[gpuID]);
+      if(i==0)
+        std::cout << std::setw(13) << h_pipe_count[0] << " new nodes after iteration " << std::setw(2) << iteration << std::endl;
       });
       #endif
 
@@ -466,6 +501,7 @@ std::cout <<"----------------------------------------"<< std::endl;
           sycl::free(EdgesDevice[gpuID], Queues[gpuID]);
           sycl::free(usm_visit[gpuID], Queues[gpuID]);
           sycl::free(usm_visit_mask[gpuID], Queues[gpuID]);
+          sycl::free(ScanDevice[gpuID], Queues[gpuID]);
     });
 
     sycl::free(usm_dist, Queues[0]);
