@@ -172,7 +172,6 @@ event parallel_explorer_kernel(queue &q,
 
       // Setup the range
       nd_range<1> range(global_size, local_size);
-      //std::cout << "Distance " << std::distance(usm_scan_temp, usm_scan_temp+1024) << std::endl;
 
       auto e = q.submit([&](handler& h) {
             // Local memory for exclusive sum, shared within the work-group
@@ -218,7 +217,7 @@ event parallel_explorer_kernel(queue &q,
           if(item.get_group(0) == 0){
             sycl::joint_exclusive_scan(item.get_group(), 
                                         usm_scan_temp, 
-                                        usm_scan_temp+(V+blockDim-1)/blockDim, 
+                                        usm_scan_temp+(V+blockDim-1)/blockDim+1, 
                                         usm_scan_temp, 
                                         sycl::plus<>());
           }
@@ -228,13 +227,13 @@ event parallel_explorer_kernel(queue &q,
                                       usm_scan_temp.get_multi_ptr<sycl::access::decorated::no>(), 
                                       sycl::plus<>());*/
           sycl::atomic_fence(sycl::memory_order::acq_rel, sycl::memory_scope::device);
-          uint32_t total_full = usm_scan_temp[(V+blockDim-1)/blockDim-1];
+          uint32_t total_full = usm_scan_temp[(V+blockDim-1)/blockDim];
 
           // 5. create global scan result
-          if(gid < V){
-            usm_scan_full[gid] = degrees[lid] + usm_scan_temp[item.get_group(0)];
+          if(gid <= V){
+              usm_scan_full[gid] = degrees[lid] + usm_scan_temp[item.get_group(0)];
           } else {
-            usm_scan_full[gid] = total_full+1;
+            usm_scan_full[gid] = total_full;
           }
 
     // 4. Using grid stride loop with binary search to find the corresponding edges 
@@ -473,6 +472,14 @@ std::cout <<"----------------------------------------"<< std::endl;
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
            Queues[gpuID].wait();
       });
+      if(i==0){
+        std::vector<uint32_t> ScanFullHost(128);
+        copyToHost(Queues[0],ScanFullDevice[0],ScanFullHost);
+        for(int i=0; i<128; i++){
+          std::cout << ScanFullHost[i] << ", ";
+        }
+      }
+      std::cout << std::endl;
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
 
             levelEvent[gpuID] =parallel_levelgen_kernel<gpuID>(Queues[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID],usm_visit_mask[gpuID],usm_visit[gpuID],iteration+1,usm_pipe_global,frontierCountDevice,usm_dist);
