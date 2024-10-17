@@ -172,7 +172,7 @@ event parallel_explorer_kernel(queue &q,
                                 const uint32_t Vsize)
     {
 
-
+      uint32_t* debug   = malloc_device<uint32_t>(128, q);
 
       // Define the work-group size and the number of work-groups
       const size_t local_size = LOCAL_WORK_SIZE;  // Number of work-items per work-group
@@ -182,10 +182,6 @@ event parallel_explorer_kernel(queue &q,
       nd_range<1> range(global_size, local_size);
 
       auto e1 = q.submit([&](handler& h) {
-            // Local memory for exclusive sum, shared within the work-group
-            sycl::local_accessor<uint32_t> edge_pointer(local_size, h);
-            sycl::local_accessor<uint32_t> degrees(local_size, h);
-
           h.parallel_for<class ExploreNeighbours1<krnl_id>>(range, [=](nd_item<1> item) {
             const uint32_t gid = item.get_global_id(0);    // global id
             const uint32_t lid  = item.get_local_id(0); // threadIdx.x
@@ -200,7 +196,7 @@ event parallel_explorer_kernel(queue &q,
            // 1. Read from usm_pipe
           if (gid < V) {
               v = usm_pipe_1[gid];
-              edge_pointer[lid] = usm_nodes_start[v]; // Store pointer to the edges start
+              usm_pipe_1[gid] = usm_nodes_start[v]; // Replacing pipe entry with edge pointer
               local_node_deg = usm_nodes_start[v+1] - usm_nodes_start[v]; // Calculate each nodes partition specific degree
           }  else {
               local_node_deg = 0;
@@ -229,12 +225,15 @@ event parallel_explorer_kernel(queue &q,
         std::cout << std::setw(10) << ScanHost[i];
       }
       std::cout << std::endl;
+      copyToHost(q,usm_scan_full,ScanHost);
+      std::cout << "ScanFullStep1 ";
+      for(int i=0; i<128; i++){
+        std::cout << std::setw(10) << ScanHost[i];
+      }
+      std::cout << std::endl;
       #endif
 
       auto e2 = q.submit([&](handler& h) {
-            // Local memory for exclusive sum, shared within the work-group
-            sycl::local_accessor<uint32_t> edge_pointer(local_size, h);
-            sycl::local_accessor<uint32_t> degrees(local_size, h);
       h.parallel_for<class ExploreNeighbours2<krnl_id>>(range, [=](nd_item<1> item) {
             const uint32_t gid = item.get_global_id(0);    // global id
             const uint32_t lid  = item.get_local_id(0); // threadIdx.x
@@ -264,9 +263,6 @@ event parallel_explorer_kernel(queue &q,
       #endif
 
       auto e3 = q.submit([&](handler& h) {
-            // Local memory for exclusive sum, shared within the work-group
-            sycl::local_accessor<uint32_t> edge_pointer(local_size, h);
-            sycl::local_accessor<uint32_t> degrees(local_size, h);
       h.parallel_for<class ExploreNeighbours3<krnl_id>>(range, [=](nd_item<1> item) {
             const uint32_t gid = item.get_global_id(0);    // global id
             const uint32_t lid  = item.get_local_id(0); // threadIdx.x
@@ -297,9 +293,6 @@ event parallel_explorer_kernel(queue &q,
       #endif
 
       auto e4 = q.submit([&](handler& h) {
-            // Local memory for exclusive sum, shared within the work-group
-            sycl::local_accessor<uint32_t> edge_pointer(local_size, h);
-            sycl::local_accessor<uint32_t> degrees(local_size, h);
     h.parallel_for<class ExploreNeighbours4<krnl_id>>(range, [=](nd_item<1> item) {
             const uint32_t gid = item.get_global_id(0);    // global id
             const uint32_t lid  = item.get_local_id(0); // threadIdx.x
@@ -316,14 +309,6 @@ event parallel_explorer_kernel(queue &q,
 
       // uint32_t it = upper_bound(usm_scan_full, total_full, i);
       uint32_t start = std::upper_bound(usm_scan_full, usm_scan_full+V, i) - usm_scan_full;
-      if(gid < V)
-        usm_scan_temp[gid+2] = start;
-      else
-        usm_scan_temp[gid+2] = 0;
-      if(start > V){
-        usm_scan_temp[0] = i;
-        usm_scan_temp[1] = start;
-      }
       // manually inlined
       /*uint32_t start = 0;
       uint32_t temp_length = V - 1;
@@ -342,13 +327,17 @@ event parallel_explorer_kernel(queue &q,
       //  usm_scan_temp[i] = start;
       
       uint32_t id = start - 1; // !!! remove -1 to use inclusive sum?
-      uint32_t  e = usm_nodes_start[id] + i  - usm_scan_full[id]; 
+      uint32_t  e = usm_pipe_1[id] + i  - usm_scan_full[id]; 
       uint32_t  n = usm_edges[e];   
       if(!usm_visit[n- Vstart]){
         usm_visit_mask[n - Vstart] = 1;
         usm_visit[n- Vstart] = 1;
       }
       
+      if(i < 128){
+        debug[i] = e;
+        usm_scan_temp[i] = n;
+      }
 
     } 
        
@@ -356,8 +345,14 @@ event parallel_explorer_kernel(queue &q,
           });
       #if VERBOSE
       e4.wait();
+      copyToHost(q,debug,ScanHost);
+      std::cout << "Debug   Step4 ";
+      for(int i=0; i<128; i++){
+        std::cout << std::setw(10) << ScanHost[i];
+      }
+      std::cout << std::endl;
       copyToHost(q,usm_scan_temp,ScanHost);
-      std::cout << "ScanTempStep4 ";
+      std::cout << "Start   Step4 ";
       for(int i=0; i<128; i++){
         std::cout << std::setw(10) << ScanHost[i];
       }
