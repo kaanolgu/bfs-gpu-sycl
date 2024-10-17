@@ -6,7 +6,7 @@ set(TARGET_NAME bfs)
 option(ENABLE_NVIDIA_BACKEND "Enable the NVIDIA backend" OFF)
 option(ENABLE_AMD_BACKEND "Enable the AMD backend" OFF)
 option(ENABLE_VERBOSE "Enable the verbose version of the execution" OFF)
-set(LOCAL_WORK_SIZE 1024 CACHE STRING "Define LWS for the architecture")
+set(LOCAL_WORK_SIZE 4 CACHE STRING "Define LWS for the architecture")
 set(CXX_EXTRA_FLAGS "" CACHE STRING "Define Extra flags here like --cuda-path etc.")
 
 # endif()

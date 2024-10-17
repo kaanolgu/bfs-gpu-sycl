@@ -207,8 +207,8 @@ event parallel_explorer_kernel(queue &q,
 
           uint32_t length = (V < gid - lid + blockDim) ? (V - (gid -lid)) : blockDim;
           // 3. Exclusive sum of degrees to find total work items per block.
-          degrees[lid] = sycl::exclusive_scan_over_group(item.get_group(), local_node_deg, sycl::plus<>());
-          // the exclusive scan over group does not sync the results so group_barrier is needed here
+          degrees[lid] = sycl::inclusive_scan_over_group(item.get_group(), local_node_deg, sycl::plus<>()); //!!! Switched to inclusive
+          // the scan over group does not sync the results so group_barrier is needed here
           sycl::group_barrier(item.get_group());
           // 3.A. ... we can proceed here to use it
           sycl::atomic_fence(sycl::memory_order::acquire, sycl::memory_scope::device);
@@ -226,13 +226,17 @@ event parallel_explorer_kernel(queue &q,
                                       usm_scan_temp.get_multi_ptr<sycl::access::decorated::no>()+grange, 
                                       usm_scan_temp.get_multi_ptr<sycl::access::decorated::no>(), 
                                       sycl::plus<>());*/
-          sycl::atomic_fence(sycl::memory_order::acq_rel, sycl::memory_scope::device);
-          uint32_t total_full = usm_scan_temp[(V+blockDim-1)/blockDim];
+          sycl::group_barrier(item.get_group());          
+          sycl::atomic_fence(sycl::memory_order::seq_cst, sycl::memory_scope::device);
 
-          // 5. create global scan result
-          if(gid <= V){
-              usm_scan_full[gid] = degrees[lid] + usm_scan_temp[item.get_group(0)];
-          } else {
+          uint32_t total_full = usm_scan_temp[(V+blockDim-1)/blockDim] + atomic_usm_scan_full;
+
+          // 5. create global _excluxive_ scan result
+          if(gid < V){
+            usm_scan_full[gid+1] = usm_scan_temp[item.get_group(0)];//degrees[lid] + usm_scan_temp[item.get_group(0)];
+          } else if(gid == V) {
+            usm_scan_full[0] = 0; 
+          } else {     
             usm_scan_full[gid] = total_full;
           }
 
@@ -243,25 +247,33 @@ event parallel_explorer_kernel(queue &q,
     ) {
 
       // uint32_t it = upper_bound(usm_scan_full, total_full, i);
+      uint32_t start = std::upper_bound(usm_scan_full, usm_scan_full+V, i) - usm_scan_full;
       // manually inlined
-      uint32_t start = 0;
-      uint32_t temp_length = V;
+      /*uint32_t start = 0;
+      uint32_t temp_length = V - 1;
       int ii;
       while (start < temp_length) {
           ii = start + (temp_length - start) / 2;
-          if (i < usm_scan_full[ii]) {
-              temp_length = ii;
+          if (i < usm_scan_full[ii]) { 
+              temp_length = ii; //!!! add -1?
           } else {
-              start = ii + 1;
+              start = ii + 1; //!!! remove +1?
           }
       } // end while
-      uint32_t id = start - 1;
+      */
+      // debug output
+      //if(i < V)
+      //  usm_scan_temp[i] = start;
+      
+      uint32_t id = start - 1; // !!! remove -1 to use inclusive sum?
       uint32_t  e = usm_nodes_start[id] + i  - usm_scan_full[id]; 
       uint32_t  n = usm_edges[e];   
       if(!usm_visit[n- Vstart]){
         usm_visit_mask[n - Vstart] = 1;
         usm_visit[n- Vstart] = 1;
       }
+      
+
     } 
        
       });
@@ -473,11 +485,19 @@ std::cout <<"----------------------------------------"<< std::endl;
            Queues[gpuID].wait();
       });
       if(i==0){
-        std::vector<uint32_t> ScanFullHost(128);
-        copyToHost(Queues[0],ScanFullDevice[0],ScanFullHost);
+        std::vector<uint32_t> ScanHost(128);
+        copyToHost(Queues[0],ScanTempDevice[0],ScanHost);
+        std::cout << "ScanTemp ";
         for(int i=0; i<128; i++){
-          std::cout << ScanFullHost[i] << ", ";
+          std::cout << std::setw(8) << ScanHost[i];
         }
+        std::cout << std::endl;
+        copyToHost(Queues[0],ScanFullDevice[0],ScanHost);
+        std::cout << "ScanFull ";
+        for(int i=0; i<128; i++){
+          std::cout << std::setw(8) << ScanHost[i];
+        }
+        std::cout << std::endl;
       }
       std::cout << std::endl;
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
