@@ -182,38 +182,34 @@ event parallel_explorer_kernel(queue &q,
       nd_range<1> range(global_size, local_size);
 
       auto e1 = q.submit([&](handler& h) {
-          h.parallel_for<class ExploreNeighbours1<krnl_id>>(range, [=](nd_item<1> item) {
-            const uint32_t gid = item.get_global_id(0);    // global id
-            const uint32_t lid  = item.get_local_id(0); // threadIdx.x
-            const uint32_t blockDim  = item.get_local_range(0); // blockDim.x
-            const uint32_t bid = item.get_group(0); // block id
-            const uint32_t grange = item.get_group_range(0);
+        h.parallel_for<class ExploreNeighbours1<krnl_id>>(range, [=](nd_item<1> item) {
+          const uint32_t gid = item.get_global_id(0);    // global id
+          const uint32_t lid  = item.get_local_id(0); // threadIdx.x
 
-            uint32_t v;
-            uint32_t local_node_deg; // this variable is shared between workitems
-          // this variable will be instantiated for each work-item separately
+          uint32_t local_node_deg;
 
-           // 1. Read from usm_pipe
+          // 1. Read from usm_pipe, replace entry with corresponding edge pointer
           if (gid < V) {
-              v = usm_pipe_1[gid];
-              usm_pipe_1[gid] = usm_nodes_start[v]; // Replacing pipe entry with edge pointer
-              local_node_deg = usm_nodes_start[v+1] - usm_nodes_start[v]; // Calculate each nodes partition specific degree
-          }  else {
-              local_node_deg = 0;
+            uint32_t v = usm_pipe_1[gid];
+            usm_pipe_1[gid] = usm_nodes_start[v]; // Replacing pipe entry with edge pointer
+            local_node_deg = usm_nodes_start[v+1] - usm_nodes_start[v]; // Calculate each nodes partition specific degree
+          } else {
+            local_node_deg = 0;
           }
+          sycl::group_barrier(item.get_group());
+
           // 2. Cumulative sum of total number of nonzeros 
           uint32_t total_nnz = reduce_over_group(item.get_group(), local_node_deg, sycl::plus<>());
+          sycl::group_barrier(item.get_group());
+
+          // 2.a. Store cummulative sum
           if (lid == 0 && gid < V){ // only write for active edges
             usm_scan_temp[item.get_group(0)] = total_nnz;
-          } 
-          // 2.A. once block sum is written here ... 
-          sycl::atomic_fence(sycl::memory_order::release, sycl::memory_scope::device);
+          }
 
-          uint32_t length = (V < gid - lid + blockDim) ? (V - (gid -lid)) : blockDim;
-          // 3. Exclusive sum of degrees to find total work items per block.
-          usm_scan_full[gid+1] = sycl::inclusive_scan_over_group(item.get_group(), local_node_deg, sycl::plus<>()); //!!! Switched to inclusive
-          // the scan over group does not sync the results so group_barrier is needed here
-          sycl::group_barrier(item.get_group());
+          // 3. Locally calculate inclusive sum, but store to global array shifted 
+          // by one to obtain exclusive sum of degrees to find total work items per block.
+          usm_scan_full[gid+1] = sycl::inclusive_scan_over_group(item.get_group(), local_node_deg, sycl::plus<>());
       });
       });
       #if VERBOSE
