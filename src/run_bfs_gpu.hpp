@@ -171,8 +171,9 @@ event parallel_explorer_kernel(queue &q,
                                 const uint32_t Vstart,
                                 const uint32_t Vsize)
     {
-
+      /*
       uint32_t* debug   = malloc_device<uint32_t>(128, q);
+      */
 
       // Define the work-group size and the number of work-groups
       const size_t local_size = LOCAL_WORK_SIZE;  // Number of work-items per work-group
@@ -181,10 +182,11 @@ event parallel_explorer_kernel(queue &q,
       // Setup the range
       nd_range<1> range(global_size, local_size);
 
-      auto e1 = q.submit([&](handler& h) {
+      q.submit([&](handler& h) {
         h.parallel_for<class ExploreNeighbours1<krnl_id>>(range, [=](nd_item<1> item) {
           const uint32_t gid = item.get_global_id(0);    // global id
-          const uint32_t lid  = item.get_local_id(0); // threadIdx.x
+          const uint32_t lid = item.get_local_id(0); // threadIdx.x
+          const uint32_t blockDim = item.get_local_range(0); // blockDim.x
 
           uint32_t local_node_deg;
 
@@ -198,6 +200,7 @@ event parallel_explorer_kernel(queue &q,
           }
           sycl::group_barrier(item.get_group());
 
+          /* Previous variant using reduce and scan; same behavior
           // 2. Cumulative sum of total number of nonzeros 
           uint32_t total_nnz = reduce_over_group(item.get_group(), local_node_deg, sycl::plus<>());
           sycl::group_barrier(item.get_group());
@@ -210,10 +213,20 @@ event parallel_explorer_kernel(queue &q,
           // 3. Locally calculate inclusive sum, but store to global array shifted 
           // by one to obtain exclusive sum of degrees to find total work items per block.
           usm_scan_full[gid+1] = sycl::inclusive_scan_over_group(item.get_group(), local_node_deg, sycl::plus<>());
+          */
+
+          // New variant using last result from scan also for block sum
+          uint32_t running_sum = sycl::inclusive_scan_over_group(item.get_group(), local_node_deg, sycl::plus<>());
+          sycl::group_barrier(item.get_group());
+          // 2. Outputs _excluxive_ group scan by shifting outputs by 1
+          usm_scan_full[gid+1] = running_sum;
+          // 3. Outputs block sum
+          if (lid == blockDim-1){
+            usm_scan_temp[item.get_group(0)] = running_sum;
+          }
       });
-      });
-      #if VERBOSE
-      e1.wait();
+      }).wait();
+      #if VERBOSE      
       std::vector<uint32_t> ScanHost(128);
       copyToHost(q,usm_scan_temp,ScanHost);
       std::cout << "ScanTempStep1 ";
@@ -229,16 +242,11 @@ event parallel_explorer_kernel(queue &q,
       std::cout << std::endl;
       #endif
 
-      auto e2 = q.submit([&](handler& h) {
+      q.submit([&](handler& h) {
       h.parallel_for<class ExploreNeighbours2<krnl_id>>(range, [=](nd_item<1> item) {
-            const uint32_t gid = item.get_global_id(0);    // global id
-            const uint32_t lid  = item.get_local_id(0); // threadIdx.x
-            const uint32_t blockDim  = item.get_local_range(0); // blockDim.x
-            const uint32_t bid = item.get_group(0); // block id
-            const uint32_t grange = item.get_group_range(0);
-          // 3.A. ... we can proceed here to use it
-
-          // 4. scan over group sums
+          const uint32_t blockDim  = item.get_local_range(0); // blockDim.x
+          // single work group to calculate exclusive scan of block sum over all blocks
+          // TODO: might want to spawn with larger work group
           if(item.get_group(0) == 0){
             sycl::joint_exclusive_scan(item.get_group(), 
                                         usm_scan_temp, 
@@ -247,9 +255,8 @@ event parallel_explorer_kernel(queue &q,
                                         sycl::plus<>());
           }
       });
-      });
-      #if VERBOSE
-      e2.wait();
+      }).wait();
+      #if VERBOSE      
       copyToHost(q,usm_scan_temp,ScanHost);
       std::cout << "ScanTempStep2 ";
       for(int i=0; i<128; i++){
@@ -258,17 +265,16 @@ event parallel_explorer_kernel(queue &q,
       std::cout << std::endl;
       #endif
 
-      auto e3 = q.submit([&](handler& h) {
+      q.submit([&](handler& h) {
       h.parallel_for<class ExploreNeighbours3<krnl_id>>(range, [=](nd_item<1> item) {
             const uint32_t gid = item.get_global_id(0);    // global id
-            const uint32_t lid  = item.get_local_id(0); // threadIdx.x
             const uint32_t blockDim  = item.get_local_range(0); // blockDim.x
-            const uint32_t bid = item.get_group(0); // block id
             const uint32_t grange = item.get_group_range(0);
 
           uint32_t total_full = usm_scan_temp[(V+blockDim-1)/blockDim];
 
-          // 5. create global _excluxive_ scan result
+          // 5. create global _excluxive_ scan result by adding 
+          // previously local result from scan_full and block offset
           if(gid < V){
             usm_scan_full[gid+1] = usm_scan_full[gid+1] + usm_scan_temp[item.get_group(0)];
           } else if(gid == V) {
@@ -277,9 +283,8 @@ event parallel_explorer_kernel(queue &q,
             usm_scan_full[gid] = total_full;
           }
       });
-      });
+      }).wait();
       #if VERBOSE
-      e3.wait();
       copyToHost(q,usm_scan_full,ScanHost);      
       std::cout << "ScanFullStep3 ";
       for(int i=0; i<128; i++){
@@ -304,10 +309,10 @@ event parallel_explorer_kernel(queue &q,
     ) {
 
       // uint32_t it = upper_bound(usm_scan_full, total_full, i);
-      uint32_t start = std::upper_bound(usm_scan_full, usm_scan_full+V, i) - usm_scan_full;
+      // uint32_t start = std::upper_bound(usm_scan_full, usm_scan_full+V, i) - usm_scan_full;
       // manually inlined
-      /*uint32_t start = 0;
-      uint32_t temp_length = V - 1;
+      uint32_t start = 0;
+      uint32_t temp_length = V;
       int ii;
       while (start < temp_length) {
           ii = start + (temp_length - start) / 2;
@@ -317,7 +322,6 @@ event parallel_explorer_kernel(queue &q,
               start = ii + 1; //!!! remove +1?
           }
       } // end while
-      */
       // debug output
       //if(i < V)
       //  usm_scan_temp[i] = start;
@@ -329,11 +333,11 @@ event parallel_explorer_kernel(queue &q,
         usm_visit_mask[n - Vstart] = 1;
         usm_visit[n- Vstart] = 1;
       }
-      
+      /*
       if(i < 128){
         debug[i] = e;
         usm_scan_temp[i] = n;
-      }
+      }*/
 
     } 
        
@@ -341,18 +345,20 @@ event parallel_explorer_kernel(queue &q,
           });
       #if VERBOSE
       e4.wait();
+      /*
       copyToHost(q,debug,ScanHost);
-      std::cout << "Debug   Step4 ";
+      std::cout << "EdgeID  Step4 ";
       for(int i=0; i<128; i++){
         std::cout << std::setw(10) << ScanHost[i];
       }
       std::cout << std::endl;
       copyToHost(q,usm_scan_temp,ScanHost);
-      std::cout << "Start   Step4 ";
+      std::cout << "EdgeVal Step4 ";
       for(int i=0; i<128; i++){
         std::cout << std::setw(10) << ScanHost[i];
       }
       std::cout << std::endl;
+      */
       #endif
 
   return e4; 
@@ -574,7 +580,6 @@ std::cout <<"----------------------------------------"<< std::endl;
         }
         std::cout << std::endl;
       }*/
-      std::cout << std::endl;
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
 
             levelEvent[gpuID] =parallel_levelgen_kernel<gpuID>(Queues[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID],usm_visit_mask[gpuID],usm_visit[gpuID],iteration+1,usm_pipe_global,frontierCountDevice,usm_dist);
