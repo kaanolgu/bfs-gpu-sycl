@@ -177,15 +177,17 @@ event parallel_explorer_kernel(queue &q,
 
       // Define the work-group size and the number of work-groups
       const size_t local_size = LOCAL_WORK_SIZE;  // Number of work-items per work-group
-      const size_t global_size = ((V*EDGE_FACTOR + local_size - 1) / local_size) * local_size;
+      const size_t global_size1 = ((V + local_size - 1) / local_size) * local_size;
+      const size_t global_size4 = ((V*EDGE_FACTOR + local_size - 1) / local_size) * local_size;
 
       // Setup the range
-      nd_range<1> range(global_size, local_size);
+      nd_range<1> range1(global_size1, local_size);
+      nd_range<1> range4(global_size4, local_size);
 
       q.submit([&](handler& h) {
-        h.parallel_for<class ExploreNeighbours1<krnl_id>>(range, [=](nd_item<1> item) {
-          const uint32_t gid = item.get_global_id(0);    // global id
-          const uint32_t lid = item.get_local_id(0); // threadIdx.x
+        h.parallel_for<class ExploreNeighbours1<krnl_id>>(range1, [=](nd_item<1> item) {
+          const uint32_t gid = item.get_global_id(0);        // global id
+          const uint32_t lid = item.get_local_id(0);         // threadIdx.x
           const uint32_t blockDim = item.get_local_range(0); // blockDim.x
 
           uint32_t local_node_deg;
@@ -218,11 +220,13 @@ event parallel_explorer_kernel(queue &q,
           // New variant using last result from scan also for block sum
           uint32_t running_sum = sycl::inclusive_scan_over_group(item.get_group(), local_node_deg, sycl::plus<>());
           sycl::group_barrier(item.get_group());
-          // 2. Outputs _excluxive_ group scan by shifting outputs by 1
-          usm_scan_full[gid+1] = running_sum;
-          // 3. Outputs block sum
-          if (lid == blockDim-1){
-            usm_scan_temp[item.get_group(0)] = running_sum;
+          if(gid < V+blockDim){
+            // 2. Outputs _excluxive_ group scan by shifting outputs by 1
+            usm_scan_full[gid+1] = running_sum;
+            // 3. Outputs block sum
+            if (lid == blockDim-1){
+              usm_scan_temp[item.get_group(0)] = running_sum;
+            }
           }
       });
       }).wait();
@@ -243,10 +247,11 @@ event parallel_explorer_kernel(queue &q,
       #endif
 
       q.submit([&](handler& h) {
-      h.parallel_for<class ExploreNeighbours2<krnl_id>>(range, [=](nd_item<1> item) {
+      h.parallel_for<class ExploreNeighbours2<krnl_id>>(range1, [=](nd_item<1> item) {
           const uint32_t blockDim  = item.get_local_range(0); // blockDim.x
           // single work group to calculate exclusive scan of block sum over all blocks
           // TODO: might want to spawn with larger work group
+          // note: last pointer to algorithm can be out of bounds here, will not be accessed
           if(item.get_group(0) == 0){
             sycl::joint_exclusive_scan(item.get_group(), 
                                         usm_scan_temp, 
@@ -266,12 +271,11 @@ event parallel_explorer_kernel(queue &q,
       #endif
 
       q.submit([&](handler& h) {
-      h.parallel_for<class ExploreNeighbours3<krnl_id>>(range, [=](nd_item<1> item) {
-            const uint32_t gid = item.get_global_id(0);    // global id
-            const uint32_t blockDim  = item.get_local_range(0); // blockDim.x
-            const uint32_t grange = item.get_group_range(0);
+      h.parallel_for<class ExploreNeighbours3<krnl_id>>(range1, [=](nd_item<1> item) {
+          const uint32_t gid       = item.get_global_id(0);    // global id
+          const uint32_t blockDim  = item.get_local_range(0);  // blockDim.x
 
-          uint32_t total_full = usm_scan_temp[(V+blockDim-1)/blockDim];
+          const uint32_t total_full = usm_scan_temp[(V+blockDim-1)/blockDim];
 
           // 5. create global _excluxive_ scan result by adding 
           // previously local result from scan_full and block offset
@@ -279,9 +283,9 @@ event parallel_explorer_kernel(queue &q,
             usm_scan_full[gid+1] = usm_scan_full[gid+1] + usm_scan_temp[item.get_group(0)];
           } else if(gid == V) {
             usm_scan_full[0] = 0; 
-          } else {     
+          } /*else {     
             usm_scan_full[gid] = total_full;
-          }
+          }*/
       });
       }).wait();
       #if VERBOSE
@@ -294,18 +298,18 @@ event parallel_explorer_kernel(queue &q,
       #endif
 
       auto e4 = q.submit([&](handler& h) {
-    h.parallel_for<class ExploreNeighbours4<krnl_id>>(range, [=](nd_item<1> item) {
+    h.parallel_for<class ExploreNeighbours4<krnl_id>>(range4, [=](nd_item<1> item) {
             const uint32_t gid = item.get_global_id(0);    // global id
             const uint32_t lid  = item.get_local_id(0); // threadIdx.x
-            const uint32_t blockDim  = item.get_local_range(0); // blockDim.x
-            const uint32_t bid = item.get_group(0); // block id
-            const uint32_t grange = item.get_group_range(0);
+            //const uint32_t blockDim  = item.get_local_range(0); // blockDim.x
+            //const uint32_t bid = item.get_group(0); // block id
+            //const uint32_t grange = item.get_group_range(0);
 
-    uint32_t total_full = usm_scan_full[V];
+    const uint32_t total_full = usm_scan_full[V];
     // 4. Using grid stride loop with binary search to find the corresponding edges 
     for (int i = gid;       // global idx
         i < total_full;     // total degree to process
-        i += global_size    // increment by global_size
+        i += global_size4   // increment by global_size
     ) {
 
       // uint32_t it = upper_bound(usm_scan_full, total_full, i);
