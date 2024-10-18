@@ -10,8 +10,9 @@ using namespace sycl;
 #include "functions.hpp"
 #include "unrolled_loop.hpp"
 #define MAX_NUM_LEVELS 100
-// TODO: replace with empirical factor determined at runtime
-#define EDGE_FACTOR 64
+// TODO: replace with different factors per GPU type, H100 SXM5 SM_CNT 132
+#define SM_FACTOR 96
+#define SM_CNT 108
 
 
 // |  Memory Model Equivalence
@@ -178,7 +179,7 @@ event parallel_explorer_kernel(queue &q,
       // Define the work-group size and the number of work-groups
       const size_t local_size = LOCAL_WORK_SIZE;  // Number of work-items per work-group
       const size_t global_size1 = ((V + local_size - 1) / local_size) * local_size;
-      const size_t global_size4 = ((V*EDGE_FACTOR + local_size - 1) / local_size) * local_size;
+      const size_t global_size4 = SM_CNT * SM_FACTOR * 1024;
 
       // Setup the range
       nd_range<1> range1(global_size1, local_size);
@@ -516,8 +517,8 @@ std::cout <<"----------------------------------------"<< std::endl;
       EdgesDevice[gpuID]     = malloc_device<uint32_t>(indexSize, Queues[gpuID]); 
       usm_visit_mask[gpuID]    = malloc_device<uint8_t>((h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID]), Queues[gpuID]); 
       usm_visit[gpuID]    = malloc_device<uint8_t>((h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID]), Queues[gpuID]); 
-      const uint32_t scanTempSize = (vertexCount*EDGE_FACTOR + LOCAL_WORK_SIZE - 1) / LOCAL_WORK_SIZE;
-      const uint32_t scanFullSize = indexSize;
+      const uint32_t scanTempSize = (vertexCount + LOCAL_WORK_SIZE - 1) / LOCAL_WORK_SIZE;
+      const uint32_t scanFullSize = vertexCount + 1; //indexSize;
       ScanTempDevice[gpuID]   = malloc_device<uint32_t>(scanTempSize, Queues[gpuID]);
       ScanFullDevice[gpuID]   = malloc_device<uint32_t>(scanFullSize, Queues[gpuID]);
       if(i==0){
