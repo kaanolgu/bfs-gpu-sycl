@@ -528,7 +528,7 @@ std::cout <<"----------------------------------------"<< std::endl;
           This will allow us to get rid of the else if cond
           in kernel ExploreNeighbours3
       */
-      Queues[gpuID].memset(ScanFullDevice[gpuID], 0, scanFullSize * sizeof(uint32_t)).wait();
+      Queues[gpuID].memset(ScanFullDevice[gpuID], 0, 1 * sizeof(uint32_t)).wait();
       if constexpr (std::is_same_v<vectorT, std::vector<uint32_t>>) {
           copyToDevice(Queues[gpuID],IndexHost,EdgesDevice[gpuID]);
           copyToDevice(Queues[gpuID],OffsetHost,OffsetDevice[gpuID]);
