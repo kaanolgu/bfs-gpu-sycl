@@ -165,6 +165,7 @@ event parallel_explorer_kernel(queue &q,
                                 uint32_t* usm_nodes_start,
                                 uint32_t *usm_edges,
                                 uint32_t* usm_pipe_1,
+                                uint32_t* usm_local_indptr,
                                 uint8_t *usm_visit_mask,
                                 uint8_t *usm_visit,
                                 uint32_t *usm_scan_temp,
@@ -196,7 +197,7 @@ event parallel_explorer_kernel(queue &q,
           // 1. Read from usm_pipe, replace entry with corresponding edge pointer
           if (gid < V) {
             uint32_t v = usm_pipe_1[gid];
-            usm_pipe_1[gid] = usm_nodes_start[v]; // Replacing pipe entry with edge pointer
+            usm_local_indptr[gid] = usm_nodes_start[v]; // Replacing pipe entry with edge pointer
             local_node_deg = usm_nodes_start[v+1] - usm_nodes_start[v]; // Calculate each nodes partition specific degree
           } else {
             local_node_deg = 0;
@@ -275,16 +276,15 @@ event parallel_explorer_kernel(queue &q,
       h.parallel_for<class ExploreNeighbours3<krnl_id>>(range1, [=](nd_item<1> item) {
           const uint32_t gid       = item.get_global_id(0);    // global id
           const uint32_t blockDim  = item.get_local_range(0);  // blockDim.x
-
-          const uint32_t total_full = usm_scan_temp[(V+blockDim-1)/blockDim];
+          // const uint32_t total_full = usm_scan_temp[(V+blockDim-1)/blockDim];
 
           // 5. create global _excluxive_ scan result by adding 
           // previously local result from scan_full and block offset
           if(gid < V){
             usm_scan_full[gid+1] = usm_scan_full[gid+1] + usm_scan_temp[item.get_group(0)];
-          } else if(gid == V) {
+          } /* else if(gid == V) {
             usm_scan_full[0] = 0; 
-          } /*else {     
+          } else {     
             usm_scan_full[gid] = total_full;
           }*/
       });
@@ -332,7 +332,7 @@ event parallel_explorer_kernel(queue &q,
       //  usm_scan_temp[i] = start;
       
       uint32_t id = start - 1; // !!! remove -1 to use inclusive sum?
-      uint32_t  e = usm_pipe_1[id] + i  - usm_scan_full[id]; 
+      uint32_t  e = usm_local_indptr[id] + i  - usm_scan_full[id];
       uint32_t  n = usm_edges[e];   
       if(!usm_visit[n- Vstart]){
         usm_visit_mask[n - Vstart] = 1;
@@ -345,7 +345,6 @@ event parallel_explorer_kernel(queue &q,
       }*/
 
     } 
-       
       });
           });
       #if VERBOSE
@@ -384,7 +383,6 @@ event parallel_levelgen_kernel(queue &q,
    // Define the work-group size and the number of work-groups
     const size_t local_size = LOCAL_WORK_SIZE;  // Number of work-items per work-group
     const size_t global_size = ((Vsize + local_size - 1) / local_size) * local_size;
-       
     // Setup the range
     nd_range<1> range(global_size, local_size);
         auto e = q.submit([&](handler& h) {
@@ -400,7 +398,6 @@ event parallel_levelgen_kernel(queue &q,
                 usm_pipe[atomic_op_global.fetch_add(1)] = gid + Vstart;
               }
           }
-
 
         });
         });
@@ -490,6 +487,7 @@ std::cout <<"----------------------------------------"<< std::endl;
     std::vector<uint8_t*> usm_visit(NUM_GPU);
     std::vector<uint32_t*> ScanTempDevice(NUM_GPU);
     std::vector<uint32_t*> ScanFullDevice(NUM_GPU);
+    std::vector<uint32_t*> usm_local_indptr(NUM_GPU);
     std::vector<uint32_t> h_pipe(vertexCount,0);
     std::vector<uint32_t> h_pipe_count(1,1);
 
@@ -517,15 +515,20 @@ std::cout <<"----------------------------------------"<< std::endl;
       EdgesDevice[gpuID]     = malloc_device<uint32_t>(indexSize, Queues[gpuID]); 
       usm_visit_mask[gpuID]    = malloc_device<uint8_t>((h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID]), Queues[gpuID]); 
       usm_visit[gpuID]    = malloc_device<uint8_t>((h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID]), Queues[gpuID]); 
-      const uint32_t scanTempSize = (vertexCount + LOCAL_WORK_SIZE - 1) / LOCAL_WORK_SIZE;
-      const uint32_t scanFullSize = vertexCount + 1; //indexSize;
+      const uint32_t scanTempSize = (offsetSize-1 + LOCAL_WORK_SIZE - 1) / LOCAL_WORK_SIZE;
+      usm_local_indptr[gpuID]   = malloc_device<uint32_t>((offsetSize), Queues[gpuID]);
+      const uint32_t scanFullSize = offsetSize; //indexSize;
       ScanTempDevice[gpuID]   = malloc_device<uint32_t>(scanTempSize, Queues[gpuID]);
       ScanFullDevice[gpuID]   = malloc_device<uint32_t>(scanFullSize, Queues[gpuID]);
       if(i==0){
         std::cout << "Allocated " << scanTempSize << " elements for ScanTempDevice buffer." << std::endl;
         std::cout << "Allocated " << scanFullSize << " elements for ScanFullDevice buffer." << std::endl;
       }
-
+      /*  Use memset to initialize the ScanFullDevice to 0s
+          This will allow us to get rid of the else if cond
+          in kernel ExploreNeighbours3
+      */
+      Queues[gpuID].memset(ScanFullDevice[gpuID], 0, scanFullSize * sizeof(uint32_t)).wait();
       if constexpr (std::is_same_v<vectorT, std::vector<uint32_t>>) {
           copyToDevice(Queues[gpuID],IndexHost,EdgesDevice[gpuID]);
           copyToDevice(Queues[gpuID],OffsetHost,OffsetDevice[gpuID]);
@@ -564,7 +567,7 @@ std::cout <<"----------------------------------------"<< std::endl;
        
 
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-              exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, usm_visit_mask[gpuID],usm_visit[gpuID],ScanTempDevice[gpuID],ScanFullDevice[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1]- h_visit_offsets[gpuID]);
+              exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global,usm_local_indptr[gpuID], usm_visit_mask[gpuID],usm_visit[gpuID],ScanTempDevice[gpuID],ScanFullDevice[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1]- h_visit_offsets[gpuID]);
        
       });
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
@@ -630,6 +633,7 @@ std::cout <<"----------------------------------------"<< std::endl;
           sycl::free(usm_visit_mask[gpuID], Queues[gpuID]);
           sycl::free(ScanTempDevice[gpuID], Queues[gpuID]);
           sycl::free(ScanFullDevice[gpuID], Queues[gpuID]);
+          sycl::free(usm_local_indptr[gpuID], Queues[gpuID]);
     });
 
     sycl::free(usm_dist, Queues[0]);

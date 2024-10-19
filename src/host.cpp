@@ -87,7 +87,7 @@ int main(int argc, char * argv[])
   CSRGraph graph_cpu = loadMatrix(1,datasetName);
 
   uint32_t numCols = graph_cpu.meta[1];  // cols -> total number of vertices
-  uint64_t numEdges  = graph_cpu.meta[2];  // nonZ count -> total edges
+  uint32_t numEdges  = graph_cpu.meta[2];  // nonZ count -> total edges
   uint32_t numRows   = graph_cpu.meta[0];  // this it the value we want! (rows)
       std::cout << std::setw(20) << std::left << "- # vertices" << std::setw(20) << numRows << std::endl;
       std::cout << std::setw(20) << std::left << "- # edges" << std::setw(20) << numEdges << std::endl;
