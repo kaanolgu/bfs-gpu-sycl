@@ -576,24 +576,10 @@ std::cout <<"----------------------------------------"<< std::endl;
               exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global,usm_local_indptr[gpuID], usm_visit_mask[gpuID],usm_visit[gpuID],ScanTempDevice[gpuID],ScanFullDevice[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1]- h_visit_offsets[gpuID]);
        
       });
-      gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
+      // no longer needed with in-order queues
+      /*gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
            Queues[gpuID].wait();
-      });
-      /*if(i==0){
-        std::vector<uint32_t> ScanHost(128);
-        copyToHost(Queues[0],ScanTempDevice[0],ScanHost);
-        std::cout << "ScanTemp ";
-        for(int i=0; i<128; i++){
-          std::cout << std::setw(10) << ScanHost[i];
-        }
-        std::cout << std::endl;
-        copyToHost(Queues[0],ScanFullDevice[0],ScanHost);
-        std::cout << "ScanFull ";
-        for(int i=0; i<128; i++){
-          std::cout << std::setw(10) << ScanHost[i];
-        }
-        std::cout << std::endl;
-      }*/
+      });*/
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
 
             levelEvent[gpuID] =parallel_levelgen_kernel<gpuID>(Queues[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID],usm_visit_mask[gpuID],usm_visit[gpuID],iteration+1,usm_pipe_global,frontierCountDevice,usm_dist);
