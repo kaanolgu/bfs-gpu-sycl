@@ -231,8 +231,9 @@ event parallel_explorer_kernel(queue &q,
             }
           }
       });
-      }).wait();
-      #if VERBOSE      
+      });
+      #if VERBOSE
+      q.wait();
       std::vector<uint32_t> ScanHost(128);
       copyToHost(q,usm_scan_temp,ScanHost);
       std::cout << "ScanTempStep1 ";
@@ -262,8 +263,9 @@ event parallel_explorer_kernel(queue &q,
                                         sycl::plus<>());
           }
       });
-      }).wait();
-      #if VERBOSE      
+      });
+      #if VERBOSE
+      q.wait();
       copyToHost(q,usm_scan_temp,ScanHost);
       std::cout << "ScanTempStep2 ";
       for(int i=0; i<128; i++){
@@ -288,8 +290,9 @@ event parallel_explorer_kernel(queue &q,
             usm_scan_full[gid] = total_full;
           }*/
       });
-      }).wait();
+      });
       #if VERBOSE
+      q.wait();
       copyToHost(q,usm_scan_full,ScanHost);      
       std::cout << "ScanFullStep3 ";
       for(int i=0; i<128; i++){
@@ -438,7 +441,10 @@ void GPURun(int vertexCount,
   std::vector<sycl::queue> Queues;
   // Insert not all devices only the required ones for model
   std::transform(Devs.begin(), Devs.begin() + NUM_GPU, std::back_inserter(Queues),
-                 [](const sycl::device &D) { return sycl::queue{D,sycl::property::queue::enable_profiling{}}; });
+                 [](const sycl::device &D) { return sycl::queue{D,{sycl::property::queue::enable_profiling{},
+                                                                   sycl::property::queue::in_order{}
+                                                                  }}; 
+                                           });
   ////////////////////////////////////////////////////////////////////////
   if (Devs.size() > 1){
   if (!Devs[0].ext_oneapi_can_access_peer(
