@@ -35,14 +35,14 @@ bool print_levels(std::vector<datatypeA>& A, std::string nameA, std::vector<std:
     std::cout << "- CPU : ";
     // Print levels and their counts
     for (int i = 0; i < size; i++) {
-        int countA = std::count(A.begin(), A.end(), i);
+        uint32_t countA = std::count(A.begin(), A.end(), i);
         std::cout << std::to_string(countA) << ", "; 
     }
         std::cout << "\n- GPU : ";
     // Print levels and their counts
     
     for (int i = 0; i < size; i++) {
-        int countB = std::count(B.back().begin(), B.back().end(), i);
+        uint32_t countB = std::count(B.back().begin(), B.back().end(), i);
         std::cout << std::to_string(countB) << ", "; 
     }
     
@@ -75,11 +75,6 @@ int main(int argc, char * argv[])
       std::cout << std::setw(20) << std::left << "- num_gpu" << std::setw(20) << NUM_GPU << std::endl;
 
 
-	std::vector<uint32_t> old_buffer_size_meta(1,0);
-	std::vector<uint32_t> old_buffer_size_config(1,0);
-  uint32_t offset_meta =0;
-  uint32_t offset_indptr =0;
-  uint32_t offset_inds =0;
 
   
 
@@ -92,6 +87,12 @@ int main(int argc, char * argv[])
       std::cout << std::setw(20) << std::left << "- # vertices" << std::setw(20) << numRows << std::endl;
       std::cout << std::setw(20) << std::left << "- # edges" << std::setw(20) << numEdges << std::endl;
       std::cout << std::setw(20) << std::left << "- dataset" << std::setw(20) << "Load [OK]" << std::endl;
+      
+    #if USE_GLOBAL_LOAD_BALANCE == 1
+    std::cout << std::setw(20) << std::left << "- load balance" << std::setw(20) << "[GLOBAL]" << std::endl;
+    #else
+    std::cout << std::setw(20) << std::left << "- load balance" << std::setw(20) << "[LOCAL]" << std::endl;
+    #endif
       std::cout <<"----------------------------------------"<< std::endl;
   // Sanity Check if we loaded the graph properly
   assert(numRows <= numCols);
@@ -99,18 +100,19 @@ int main(int argc, char * argv[])
 
   // GPU
   std::vector<int> h_dist(numCols,-1);
-  h_dist[start_vertex]=0; 
+  h_dist[start_vertex]=0;
   std::vector<std::vector<int>> h_distancesGPU(num_runs,h_dist);
   std::vector<uint32_t> h_graph_nodes_start;
   std::vector<uint8_t> h_updating_graph_mask(numCols,0);
-  std::vector<uint8_t> h_graph_visited(numCols,0); 
+  std::vector<uint8_t> h_graph_visited(numCols,0);
+
 
   
   h_graph_visited[start_vertex]=1;
-   std::vector<uint32_t>  h_visit_offsets(NUM_GPU+1,0);
+  std::vector<uint32_t>  h_visit_offsets(NUM_GPU+1,0);
 
 
-    std::vector<int> selected = {0}; // Start with 0
+    std::vector<uint32_t> selected = {0}; // Start with 0
     // Select elements at indices that are multiples of 4
     for (size_t i = 0; i < graph.meta.size(); i += 4) {
         selected.push_back(graph.meta[i]);
@@ -122,6 +124,10 @@ int main(int argc, char * argv[])
 
 
   #if VERBOSE ==1 
+for (size_t i = 0; i < graph.meta.size(); i += 1) {
+    std::cout << "graph meta[" << i <<"]: "<<  graph.meta[i] << std::endl;
+}
+
 for( uint32_t i =0; i < h_visit_offsets.size(); i++)
 std::cout << "- GPU[" << std::to_string(i) << "] OFFSET:\t" << h_visit_offsets[i] << std::endl;
 std::cout <<"----------------------------------------"<< std::endl;
@@ -142,9 +148,9 @@ std::cout <<"----------------------------------------"<< std::endl;
 
 
   // initalize the memory again
-  std::vector<uint32_t> host_graph_mask(numCols,0);
-  std::vector<uint32_t> host_updating_graph_mask(numCols,0);
-  std::vector<uint32_t> host_graph_visited(numCols,0);
+  std::vector<uint8_t> host_graph_mask(numCols,0);
+  std::vector<uint8_t> host_updating_graph_mask(numCols,0);
+  std::vector<uint8_t> host_graph_visited(numCols,0);
   std::vector<int> host_level(numCols,-1);
     
   //set the start_vertex node as 1 in the mask
@@ -152,6 +158,8 @@ std::cout <<"----------------------------------------"<< std::endl;
   host_graph_visited[start_vertex]=1;
   host_level[start_vertex]=0; 
   std::vector<DeviceInfo> host_run_statistics;
+
+
   run_bfs_cpu(numCols,graph_cpu.indptr,graph_cpu.inds, host_graph_mask, host_updating_graph_mask, host_graph_visited, host_level,newJsonObj,h_visit_offsets,host_run_statistics);
 
   // Select the element with the maximum value
@@ -167,10 +175,17 @@ std::cout <<"----------------------------------------"<< std::endl;
 
     // newJsonObj["num_gpus"] = NUM_GPU; // Adding an array
     // newJsonObj["dataset"] = datasetName;
+    newJsonObj["startVertex"] = start_vertex;
+    newJsonObj["numLevels"] = maxLevelCPU - 1;
     newJsonObj["avgMTEPS"] = (static_cast<unsigned int>(newJsonObj["edgesCount"])/(1000000*static_cast<double>(newJsonObj["avgExecutionTime"])*1e-3));
     newJsonObj["avgMTEPSFilter"] = (static_cast<unsigned int>(newJsonObj["edgesCount"])/(1000000*static_cast<double>(newJsonObj["avgExecutionTimeFiltered"])*1e-3));
     newJsonObj["maxMTEPSFilter"] = (static_cast<unsigned int>(newJsonObj["edgesCount"])/(1000000*static_cast<double>(newJsonObj["minExecutionTimeFiltered"])*1e-3));
     newJsonObj["edgesCoverage"] = static_cast<double>(newJsonObj["edgesCount"]) / numEdges * 100.0;
+    // Add counts from the second dimension (A.back()) directly into "Levels" key
+    for (int i = 0; i < maxLevelCPU - 1; i++) {
+        int countA = std::count(h_distancesGPU.back().begin(), h_distancesGPU.back().end(), i);
+        newJsonObj["LevelsGPU"].push_back(countA); // Directly append to "Levels"
+    }
 
 
 #if VERBOSE == 1
@@ -213,7 +228,12 @@ std::cout << std::endl;
         // If the file doesn't exist, start with an empty object
         combinedJsonObj = json::object();
     }
-    std::string datasetKey = datasetName + "_" + std::to_string(num_runs);
+#if USE_GLOBAL_LOAD_BALANCE == 1
+    std::string datasetKey = datasetName + "_" + std::to_string(num_runs) + "_" + "global";
+#else
+    std::string datasetKey = datasetName + "_" + std::to_string(num_runs) + "_" + "local";
+#endif
+    
     // Add the new JSON object under the key corresponding to NUM_GPU
     combinedJsonObj[datasetKey][std::to_string(NUM_GPU)] = newJsonObj;
 

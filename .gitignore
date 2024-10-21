@@ -6,3 +6,7 @@ report*
 1
 dataset/
 data.json
+*.job
+*.out
+*.nsys*
+*.ncu*

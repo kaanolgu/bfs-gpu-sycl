@@ -10,9 +10,12 @@ using namespace sycl;
 #include "functions.hpp"
 #include "unrolled_loop.hpp"
 #define MAX_NUM_LEVELS 100
+
+#if USE_GLOBAL_LOAD_BALANCE == 1 
 // TODO: replace with different factors per GPU type, H100 SXM5 SM_CNT 132
 #define SM_FACTOR 96
 #define SM_CNT 108
+#endif
 
 
 // |  Memory Model Equivalence
@@ -146,6 +149,7 @@ double GetExecutionTime(const event &e) {
 //-- initialize Kernel for Exploring the neighbours of next to visit 
 //-- nodes
 //-------------------------------------------------------------------
+#if USE_GLOBAL_LOAD_BALANCE == 1 
 template <int krnl_id>
 class ExploreNeighbours1;
 template <int krnl_id>
@@ -157,8 +161,16 @@ class ExploreNeighbours4;
 template <int krnl_id>
 class ExploreNeighbours5;
 template <int krnl_id>
+class LevelGen; 
+#else
+template <int krnl_id>
+class ExploreNeighbours;
+template <int krnl_id>
 class LevelGen;
+#endif
 
+
+#if USE_GLOBAL_LOAD_BALANCE == 1  
 template <int krnl_id>
 event parallel_explorer_kernel(queue &q,
                                 const uint32_t V,
@@ -370,8 +382,98 @@ event parallel_explorer_kernel(queue &q,
 
   return e1; 
 }
+#else
+template <int krnl_id>
+event parallel_explorer_kernel(queue &q,
+                                const uint32_t V,
+                                uint32_t* usm_nodes_start,
+                                uint32_t *usm_edges,
+                                uint32_t* usm_pipe_1,
+                                uint8_t *usm_visit_mask,
+                                uint8_t *usm_visit,
+                                const uint32_t Vstart,
+                                const uint32_t Vsize)
+    {
 
 
+
+      // Define the work-group size and the number of work-groups
+      const size_t local_size = LOCAL_WORK_SIZE;  // Number of work-items per work-group
+      const size_t global_size = ((V + local_size - 1) / local_size) * local_size;
+
+      const size_t V_stride = ((V + local_size - 1) / local_size);
+      // Setup the range
+      nd_range<1> range(global_size, local_size);
+
+      auto e = q.submit([&](handler& h) {
+            // Local memory for exclusive sum, shared within the work-group
+            sycl::local_accessor<uint32_t> edge_pointer(local_size, h);
+            sycl::local_accessor<uint32_t> degrees(local_size, h);
+
+          h.parallel_for<class ExploreNeighbours<krnl_id>>(range, [=](nd_item<1> item) {
+            const int gid = item.get_group(0) + item.get_local_id(0) * V_stride;    // global id
+            const int lid  = item.get_local_id(0); // threadIdx.x
+            const int blockDim  = item.get_local_range(0); // blockDim.x
+
+            uint32_t v;
+            uint32_t local_node_deg; // this variable is shared between workitems
+          // this variable will be instantiated for each work-item separately
+
+           // 1. Read from usm_pipe
+          if (gid < V) {
+              v = usm_pipe_1[gid];
+              edge_pointer[lid] = usm_nodes_start[v]; // Store pointer to the edges start
+              local_node_deg = usm_nodes_start[v+1] - usm_nodes_start[v]; // Calculate each nodes partition specific degree
+          }  else {
+              local_node_deg = 0;
+          }
+          // 2. Cumulative sum of total number of nonzeros 
+          uint32_t total_nnz = reduce_over_group(item.get_group(), local_node_deg, sycl::plus<>());
+          /*  Commenting out length check because it generates mismatching results in between
+              the executions like previously with the group_barrier missing issue we had. 
+              Possibly group_barrier does not block gid and it keeps counting */
+          // uint32_t length = (V < gid - lid + blockDim) ? (V - (gid -lid)) : blockDim;
+          // 3. Exclusive sum of degrees to find total work items per block.
+          degrees[lid] = sycl::exclusive_scan_over_group(item.get_group(), local_node_deg, sycl::plus<>());
+          // the exclusive scan over group does not sync the results so group_barrier is needed here
+          sycl::group_barrier(item.get_group());
+
+    // 4. Using grid stride loop with binary search to find the corresponding edges 
+    for (int i = lid;            // threadIdx.x
+        i < total_nnz;  // total degree to process
+        i += blockDim    // increment by blockDim.x
+    ) {
+
+      // uint32_t it = upper_bound(degrees,length, i);
+    uint32_t start = 0;
+    uint32_t temp_length = blockDim;
+    int ii;
+    while (start < temp_length) {
+        ii = start + (temp_length - start) / 2;
+        if (i < degrees[ii]) {
+            temp_length = ii;
+        } else {
+            start = ii + 1;
+        }
+    } // end while
+      uint32_t id =  start - 1;
+      uint32_t  e = edge_pointer[id] + i  - degrees[id]; 
+      uint32_t  n  = usm_edges[e];   
+      if(!usm_visit[n- Vstart]){
+        usm_visit_mask[n - Vstart] = 1;
+        usm_visit[n- Vstart] = 1;
+      }
+    } 
+          
+      });
+          });
+
+
+  return e; 
+}
+#endif
+
+#if USE_GLOBAL_LOAD_BALANCE == 1  
 template <int krnl_id>
 event parallel_levelgen_kernel(queue &q,
                                 const uint32_t Vstart,
@@ -406,6 +508,47 @@ event parallel_levelgen_kernel(queue &q,
         });
 return e;
 }
+#else
+template <int krnl_id>
+event parallel_levelgen_kernel(queue &q,
+                                const uint32_t Vstart,
+                                const uint32_t Vsize,
+                                uint8_t *usm_visit_mask,
+                                uint8_t *usm_visit,
+                                const int level_plus_one,
+                                uint32_t *usm_pipe,
+                                uint32_t *usm_pipe_size,
+                                int* usm_dist
+                                 ){
+   // Define the work-group size and the number of work-groups
+    const size_t local_size = LOCAL_WORK_SIZE;  // Number of work-items per work-group
+    const size_t global_size = ((Vsize + local_size - 1) / local_size) * local_size;
+    const size_t V_stride = (Vsize + local_size - 1) / local_size;
+
+    // Setup the range
+    nd_range<1> range(global_size, local_size);
+        auto e = q.submit([&](handler& h) {
+        h.parallel_for<class LevelGen<krnl_id>>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
+          // const int gid = item.get_global_id(0);    // global id
+          const int gid = item.get_group(0) + item.get_local_id(0) * V_stride;    // strided global id
+          
+          if (gid < Vsize) {
+              uint8_t vmask = usm_visit_mask[gid];
+              if(vmask == 1){
+                usm_dist[gid + Vstart] = level_plus_one;  
+                usm_visit_mask[gid] = 0;
+                sycl::atomic_ref<uint32_t, sycl::memory_order::relaxed,sycl::memory_scope::system, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
+                usm_pipe[atomic_op_global.fetch_add(1)] = gid + Vstart;
+              }
+          }
+
+
+        });
+        });
+return e;
+}
+#endif
+
 
           
 
@@ -417,7 +560,7 @@ return e;
 // into sum. This loop will be unrolled by the specified unroll_factor.
 // Template function to handle both types
 template<typename vectorT>
-void GPURun(int vertexCount, 
+void GPURun(uint32_t vertexCount,
                   vectorT &IndexHost,
                   vectorT &OffsetHost,
                   std::vector<uint8_t> &h_visit_mask,
@@ -431,20 +574,20 @@ void GPURun(int vertexCount,
   auto Devs = sycl::device::get_devices(info::device_type::gpu);
 
 
-  // if (Devs.size() < 2) {
-  //   std::cout << "Cannot test P2P capabilities, at least two devices are "
-  //                "required, exiting."
-  //             << std::endl;
-
-  // }
-
   std::vector<sycl::queue> Queues;
   // Insert not all devices only the required ones for model
+
+
+#if USE_GLOBAL_LOAD_BALANCE == 1  
   std::transform(Devs.begin(), Devs.begin() + NUM_GPU, std::back_inserter(Queues),
                  [](const sycl::device &D) { return sycl::queue{D,{sycl::property::queue::enable_profiling{},
                                                                    sycl::property::queue::in_order{}
                                                                   }}; 
                                            });
+#else
+  std::transform(Devs.begin(), Devs.begin() + NUM_GPU, std::back_inserter(Queues),
+                 [](const sycl::device &D) { return sycl::queue{D,sycl::property::queue::enable_profiling{}}; });
+#endif
   ////////////////////////////////////////////////////////////////////////
   if (Devs.size() > 1){
   if (!Devs[0].ext_oneapi_can_access_peer(
@@ -491,9 +634,11 @@ std::cout <<"----------------------------------------"<< std::endl;
     std::vector<uint32_t*> EdgesDevice(NUM_GPU);
     std::vector<uint8_t*> usm_visit_mask(NUM_GPU);
     std::vector<uint8_t*> usm_visit(NUM_GPU);
+#if USE_GLOBAL_LOAD_BALANCE == 1
     std::vector<uint32_t*> ScanTempDevice(NUM_GPU);
     std::vector<uint32_t*> ScanFullDevice(NUM_GPU);
     std::vector<uint32_t*> usm_local_indptr(NUM_GPU);
+#endif
     std::vector<uint32_t> h_pipe(vertexCount,0);
     std::vector<uint32_t> h_pipe_count(1,1);
 
@@ -521,9 +666,11 @@ std::cout <<"----------------------------------------"<< std::endl;
       EdgesDevice[gpuID]     = malloc_device<uint32_t>(indexSize, Queues[gpuID]); 
       usm_visit_mask[gpuID]    = malloc_device<uint8_t>((h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID]), Queues[gpuID]); 
       usm_visit[gpuID]    = malloc_device<uint8_t>((h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID]), Queues[gpuID]); 
+#if USE_GLOBAL_LOAD_BALANCE == 1
+
       const uint32_t scanTempSize = (offsetSize-1 + LOCAL_WORK_SIZE - 1) / LOCAL_WORK_SIZE;
       usm_local_indptr[gpuID]   = malloc_device<uint32_t>((offsetSize), Queues[gpuID]);
-      const uint32_t scanFullSize = offsetSize; //indexSize;
+      const uint32_t scanFullSize = offsetSize; //offsetSize;
       ScanTempDevice[gpuID]   = malloc_device<uint32_t>(scanTempSize, Queues[gpuID]);
       ScanFullDevice[gpuID]   = malloc_device<uint32_t>(scanFullSize, Queues[gpuID]);
       if(i==0){
@@ -535,6 +682,8 @@ std::cout <<"----------------------------------------"<< std::endl;
           in kernel ExploreNeighbours3
       */
       Queues[gpuID].memset(ScanFullDevice[gpuID], 0, 1 * sizeof(uint32_t)).wait();
+
+#endif
       if constexpr (std::is_same_v<vectorT, std::vector<uint32_t>>) {
           copyToDevice(Queues[gpuID],IndexHost,EdgesDevice[gpuID]);
           copyToDevice(Queues[gpuID],OffsetHost,OffsetDevice[gpuID]);
@@ -571,7 +720,7 @@ std::cout <<"----------------------------------------"<< std::endl;
         break;
       }    
        
-
+#if USE_GLOBAL_LOAD_BALANCE == 1  
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
               exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global,usm_local_indptr[gpuID], usm_visit_mask[gpuID],usm_visit[gpuID],ScanTempDevice[gpuID],ScanFullDevice[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1]- h_visit_offsets[gpuID]);
        
@@ -593,6 +742,29 @@ std::cout <<"----------------------------------------"<< std::endl;
       copyToHost(Queues[0],frontierCountDevice,h_pipe_count);
       Queues[0].wait();
       copybackhostEvent = Queues[0].memcpy(frontierCountDevice, &zero, sizeof(uint32_t));
+#else
+      gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
+              exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, usm_visit_mask[gpuID],usm_visit[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1]- h_visit_offsets[gpuID]);
+       
+      });
+      gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
+           Queues[gpuID].wait();
+      });
+      gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
+
+            levelEvent[gpuID] =parallel_levelgen_kernel<gpuID>(Queues[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID],usm_visit_mask[gpuID],usm_visit[gpuID],iteration+1,usm_pipe_global,frontierCountDevice,usm_dist);
+      });
+      gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
+            Queues[gpuID].wait();
+      });
+
+
+
+      copyToHost(Queues[0],frontierCountDevice,h_pipe_count);
+      Queues[0].wait();
+      copybackhostEvent = Queues[0].memcpy(frontierCountDevice, &zero, sizeof(uint32_t));
+#endif
+
 
       // Capture execution times 
       #if VERBOSE == 1
@@ -623,9 +795,11 @@ std::cout <<"----------------------------------------"<< std::endl;
           sycl::free(EdgesDevice[gpuID], Queues[gpuID]);
           sycl::free(usm_visit[gpuID], Queues[gpuID]);
           sycl::free(usm_visit_mask[gpuID], Queues[gpuID]);
+#if USE_GLOBAL_LOAD_BALANCE == 1  
           sycl::free(ScanTempDevice[gpuID], Queues[gpuID]);
           sycl::free(ScanFullDevice[gpuID], Queues[gpuID]);
           sycl::free(usm_local_indptr[gpuID], Queues[gpuID]);
+#endif
     });
 
     sycl::free(usm_dist, Queues[0]);

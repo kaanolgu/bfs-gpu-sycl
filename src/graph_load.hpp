@@ -11,13 +11,13 @@ struct CSRGraph {
     std::vector<uint32_t> inds;
 
     // Use vectors of vectors for when partitionCount is greater than 1
-    std::vector<std::vector<uint32_t>> metaMulti;
     std::vector<std::vector<uint32_t>> indptrMulti;
     std::vector<std::vector<uint32_t>> indsMulti;
 
     // Flag to check if we're using multi-dimensional vectors
     bool isMultiDimensional = false;
 };
+
 
 void readFromMM(const char *filename, std::vector<uint32_t> &buffer) {
     #if VERBOSE == 1
@@ -40,7 +40,6 @@ void readFromMM(const char *filename, std::vector<uint32_t> &buffer) {
 
     size_t originalSize = buffer.size();
     buffer.resize(originalSize + fileSize / sizeof(uint32_t));
-
     file.read(reinterpret_cast<char *>(buffer.data() + originalSize), fileSize);
 #if VERBOSE == 1
     std::cout << " OK" << std::endl;
@@ -70,7 +69,7 @@ CSRGraph loadMatrix(uint32_t partitionCount, std::string datasetName) {
     } else {
         // Use multi-dimensional vectors for multiple partitions
         graph.isMultiDimensional = true;
-        // graph.metaMulti.resize(partitionCount);
+
         graph.indptrMulti.resize(partitionCount);
         graph.indsMulti.resize(partitionCount);
 
@@ -79,7 +78,7 @@ CSRGraph loadMatrix(uint32_t partitionCount, std::string datasetName) {
             std::string str_indptr = non_switch + std::to_string(i) + "-indptr.bin";
             std::string str_inds = non_switch + std::to_string(i) + "-inds.bin";
             
-            // readFromMM(str_meta.c_str(), graph.metaMulti[i]);
+
             readFromMM(str_indptr.c_str(), graph.indptrMulti[i]);
             readFromMM(str_inds.c_str(), graph.indsMulti[i]);
         }
