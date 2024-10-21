@@ -186,7 +186,7 @@ event parallel_explorer_kernel(queue &q,
       nd_range<1> range1(global_size1, local_size);
       nd_range<1> range4(global_size4, local_size);
 
-      q.submit([&](handler& h) {
+      auto e1 = q.submit([&](handler& h) {
         h.parallel_for<class ExploreNeighbours1<krnl_id>>(range1, [=](nd_item<1> item) {
           const uint32_t gid = item.get_global_id(0);        // global id
           const uint32_t lid = item.get_local_id(0);         // threadIdx.x
@@ -301,7 +301,7 @@ event parallel_explorer_kernel(queue &q,
       std::cout << std::endl;
       #endif
 
-      auto e4 = q.submit([&](handler& h) {
+      q.submit([&](handler& h) {
     h.parallel_for<class ExploreNeighbours4<krnl_id>>(range4, [=](nd_item<1> item) {
             const uint32_t gid = item.get_global_id(0);    // global id
             const uint32_t lid  = item.get_local_id(0); // threadIdx.x
@@ -351,7 +351,7 @@ event parallel_explorer_kernel(queue &q,
       });
           });
       #if VERBOSE
-      e4.wait();
+      q.wait();
       /*
       copyToHost(q,debug,ScanHost);
       std::cout << "EdgeID  Step4 ";
@@ -368,7 +368,7 @@ event parallel_explorer_kernel(queue &q,
       */
       #endif
 
-  return e4; 
+  return e1; 
 }
 
 
