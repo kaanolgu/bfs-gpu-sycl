@@ -11,11 +11,6 @@ using namespace sycl;
 #include "unrolled_loop.hpp"
 #define MAX_NUM_LEVELS 100
 
-#if USE_GLOBAL_LOAD_BALANCE == 1 
-// TODO: replace with different factors per GPU type, H100 SXM5 SM_CNT 132
-#define SM_FACTOR 96
-#define SM_CNT 108
-#endif
 
 
 // |  Memory Model Equivalence
