@@ -406,7 +406,11 @@ event parallel_explorer_kernel(queue &q,
             sycl::local_accessor<uint32_t> degrees(local_size, h);
 
           h.parallel_for<class ExploreNeighbours<krnl_id>>(range, [=](nd_item<1> item) {
+#if USE_STRIDED_LOCAL_LOAD_BALANCE
             const int gid = item.get_group(0) + item.get_local_id(0) * V_stride;    // global id
+#else
+            const int gid = item.get_global_id(0);    // global id
+#endif
             const int lid  = item.get_local_id(0); // threadIdx.x
             const int blockDim  = item.get_local_range(0); // blockDim.x
 
@@ -525,8 +529,12 @@ event parallel_levelgen_kernel(queue &q,
         auto e = q.submit([&](handler& h) {
         h.parallel_for<class LevelGen<krnl_id>>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
           // const int gid = item.get_global_id(0);    // global id
-          const int gid = item.get_group(0) + item.get_local_id(0) * V_stride;    // strided global id
           
+#if USE_STRIDED_LOCAL_LOAD_BALANCE
+            const int gid = item.get_group(0) + item.get_local_id(0) * V_stride;    // strided global id
+#else
+            const int gid = item.get_global_id(0);    // global id
+#endif          
           if (gid < Vsize) {
               uint8_t vmask = usm_visit_mask[gid];
               if(vmask == 1){

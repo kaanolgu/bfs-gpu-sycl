@@ -231,7 +231,11 @@ std::cout << std::endl;
 #if USE_GLOBAL_LOAD_BALANCE == 1
     std::string datasetKey = datasetName + "_" + std::to_string(num_runs) + "_" + "global";
 #else
-    std::string datasetKey = datasetName + "_" + std::to_string(num_runs) + "_" + "local";
+    #if USE_STRIDED_LOCAL_LOAD_BALANCE
+        std::string datasetKey = datasetName + "_" + std::to_string(num_runs) + "_" + "local_strided";
+    #else
+        std::string datasetKey = datasetName + "_" + std::to_string(num_runs) + "_" + "local";
+    #endif
 #endif
     
     // Add the new JSON object under the key corresponding to NUM_GPU
