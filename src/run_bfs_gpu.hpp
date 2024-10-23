@@ -187,7 +187,7 @@ event parallel_explorer_kernel(queue &q,
       // Define the work-group size and the number of work-groups
       const size_t local_size = LOCAL_WORK_SIZE;  // Number of work-items per work-group
       const size_t global_size1 = ((V + local_size - 1) / local_size) * local_size;
-      const size_t global_size4 = SM_COUNT * SM_FACTOR * 1024;
+      const size_t global_size4 = SM_COUNT * SM_FACTOR * LOCAL_WORK_SIZE;
 
       // Setup the range
       nd_range<1> range1(global_size1, local_size);
