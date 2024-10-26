@@ -33,7 +33,7 @@ endif()
 
 
 # set(COMPILE_LINK_FLAGS "-fopenmp -I/opt/software/FPGA/IntelFPGA/oneapi/24.2.1/compiler/latest/opt/compiler/include/ -fsycl -fsycl-targets=${SYCL_TARGET} ${SYCL_BACKEND} ${SYCL_BACKEND_DEVICE} ${CXX_EXTRA_FLAGS}")
-set(COMPILE_LINK_FLAGS "-fopenmp -I/opt/software/FPGA/IntelFPGA/oneapi/24.2.1/compiler/latest/opt/compiler/include/ -fsycl -fsycl-targets=${SYCL_TARGET} ${SYCL_BACKEND} ${SYCL_BACKEND_DEVICE} ${CXX_EXTRA_FLAGS}")
+set(COMPILE_LINK_FLAGS "-fsycl -fsycl-targets=${SYCL_TARGET} ${SYCL_BACKEND} ${SYCL_BACKEND_DEVICE} ${CXX_EXTRA_FLAGS}")
 
 
 # Set GPU_TARGETS option: can be 'single', 'all', or a custom list
