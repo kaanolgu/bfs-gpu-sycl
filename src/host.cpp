@@ -47,7 +47,7 @@ bool print_levels(std::vector<datatypeA>& A, std::string nameA, std::vector<std:
     }
     
     // Verify results and print the test status
-    bool status = std::equal(A.begin(), A.end(), B.back().begin()) && areAllRowsEqualToLast(B);
+    bool status = std::equal(A.begin(), A.end(), B.back().begin()) && areAllRowsEqualToLast(B,size);
 
     
     return status;

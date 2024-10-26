@@ -128,7 +128,7 @@ std::string formatDouble(double value, int precision = 2) {
     return oss.str();
 }
 
-bool areAllRowsEqualToLast(const std::vector<std::vector<int>>& h_distancesGPU) {
+bool areAllRowsEqualToLast(const std::vector<std::vector<int>>& h_distancesGPU,int size) {
     // Check if the vector is empty or has only one row
     if (h_distancesGPU.size() < 2) {
         return true; // Consider it as matching
@@ -140,11 +140,21 @@ bool areAllRowsEqualToLast(const std::vector<std::vector<int>>& h_distancesGPU) 
     for (size_t i = 0; i < h_distancesGPU.size() - 1; ++i) {
         // Use std::equal to compare the current row with the last row
         if (!std::equal(h_distancesGPU[i].begin(), h_distancesGPU[i].end(), lastRow.begin())) {
-            std::cout << "distanceGPU[" << i << "] does not match the last row ";
-            for (int i = 0; i < h_distancesGPU[i].size(); i++) {
-                int countB = std::count(h_distancesGPU[i].begin(), h_distancesGPU[i].end(), i);
-                std::cout << std::to_string(countB) << ", "; 
+            std::cout << "\n distanceGPU[" << i << "] does not match the last distance \n";
+            for (int m = 0; m <size; m++) {
+                int countA = std::count(h_distancesGPU[i].begin(), h_distancesGPU[i].end(), m);  
+                 std::cout << std::to_string(countA) << ", "; 
             }
+            for (size_t j = 0; j < h_distancesGPU[i].size(); ++j) {
+            if (h_distancesGPU[i][j] != lastRow[j]) {
+                std::cout << "Mismatch at index " << j << ": h_distancesGPU[" << i << "][" << j 
+                  << "] = " << h_distancesGPU[i][j] 
+                  << ", lastRow[" << j << "] = " << lastRow[j] << std::endl;
+                int countA = std::count(h_distancesGPU[i].begin(), h_distancesGPU[i].end(), h_distancesGPU[i][j]);
+                int countB = std::count(lastRow.begin(), lastRow.end(), j);
+                std::cout << "Nodes in level " << j << ": " << std::to_string(countA) << " – " << std::to_string(countB) << std::endl; 
+    }
+}
             return false; // Return false if any row doesn't match
         }
     }
