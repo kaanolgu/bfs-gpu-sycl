@@ -9,6 +9,7 @@ option(ENABLE_VERBOSE "Enable the verbose version of the execution" OFF)
 set(LOCAL_WORK_SIZE 1024 CACHE STRING "Define LWS for the architecture")
 set(CXX_EXTRA_FLAGS "" CACHE STRING "Define Extra flags here like --cuda-path etc.")
 option(USE_GLOBAL_LOAD_BALANCE "Enable the Global load balance, if OFF it will use local load balancing" OFF)
+option(USE_STRIDED_LOCAL_LOAD_BALANCE "Enable the strided version of the execution which performs better with RMAT graphs" OFF)
 set(SM_FACTOR 96 CACHE STRING "Define SM_FACTOR for the global load balance")
 set(SM_COUNT 108 CACHE STRING "Define SM_COUNT for the global load balance")
 
@@ -31,7 +32,8 @@ else()
 endif()
 
 
-set(COMPILE_LINK_FLAGS "-fsycl -fsycl-targets=${SYCL_TARGET} ${SYCL_BACKEND} ${SYCL_BACKEND_DEVICE} ${CXX_EXTRA_FLAGS}")
+# set(COMPILE_LINK_FLAGS "-fopenmp -I/opt/software/FPGA/IntelFPGA/oneapi/24.2.1/compiler/latest/opt/compiler/include/ -fsycl -fsycl-targets=${SYCL_TARGET} ${SYCL_BACKEND} ${SYCL_BACKEND_DEVICE} ${CXX_EXTRA_FLAGS}")
+set(COMPILE_LINK_FLAGS "-fopenmp -I/opt/software/FPGA/IntelFPGA/oneapi/24.2.1/compiler/latest/opt/compiler/include/ -fsycl -fsycl-targets=${SYCL_TARGET} ${SYCL_BACKEND} ${SYCL_BACKEND_DEVICE} ${CXX_EXTRA_FLAGS}")
 
 
 # Set GPU_TARGETS option: can be 'single', 'all', or a custom list
@@ -63,6 +65,7 @@ foreach(GPU_NUMBER IN LISTS GPU_TARGET_LIST)
     target_compile_definitions(${GPU_TARGET} PUBLIC SM_COUNT=${SM_COUNT})
     target_compile_definitions(${GPU_TARGET} PUBLIC VERBOSE=$<IF:$<BOOL:${ENABLE_VERBOSE}>,1,0>)
     target_compile_definitions(${GPU_TARGET} PUBLIC USE_GLOBAL_LOAD_BALANCE=$<IF:$<BOOL:${USE_GLOBAL_LOAD_BALANCE}>,1,0>)
+    target_compile_definitions(${GPU_TARGET} PUBLIC USE_STRIDED_LOCAL_LOAD_BALANCE=$<IF:$<BOOL:${USE_STRIDED_LOCAL_LOAD_BALANCE}>,1,0>)
     set_target_properties(${GPU_TARGET} PROPERTIES COMPILE_FLAGS "${COMPILE_LINK_FLAGS}")
     set_target_properties(${GPU_TARGET} PROPERTIES LINK_FLAGS "${COMPILE_LINK_FLAGS}")
 
