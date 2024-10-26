@@ -10,6 +10,8 @@ using namespace sycl;
 #include "functions.hpp"
 #include "unrolled_loop.hpp"
 #define MAX_NUM_LEVELS 100
+/* Introduces overheads not performant*/
+// #include <omp.h>
 
 
 
@@ -378,6 +380,7 @@ event parallel_explorer_kernel(queue &q,
   return e1; 
 }
 #else
+
 template <int krnl_id>
 event parallel_explorer_kernel(queue &q,
                                 const uint32_t V,
@@ -508,6 +511,7 @@ event parallel_levelgen_kernel(queue &q,
 return e;
 }
 #else
+
 template <int krnl_id>
 event parallel_levelgen_kernel(queue &q,
                                 const uint32_t Vstart,
@@ -580,17 +584,12 @@ void GPURun(uint32_t vertexCount,
   std::vector<sycl::queue> Queues;
   // Insert not all devices only the required ones for model
 
-
-#if USE_GLOBAL_LOAD_BALANCE == 1  
+  // both load balancing implementations now support in order queue
   std::transform(Devs.begin(), Devs.begin() + NUM_GPU, std::back_inserter(Queues),
                  [](const sycl::device &D) { return sycl::queue{D,{sycl::property::queue::enable_profiling{},
                                                                    sycl::property::queue::in_order{}
                                                                   }}; 
                                            });
-#else
-  std::transform(Devs.begin(), Devs.begin() + NUM_GPU, std::back_inserter(Queues),
-                 [](const sycl::device &D) { return sycl::queue{D,sycl::property::queue::enable_profiling{}}; });
-#endif
   ////////////////////////////////////////////////////////////////////////
   if (Devs.size() > 1){
   if (!Devs[0].ext_oneapi_can_access_peer(
@@ -620,7 +619,8 @@ std::cout <<"----------------------------------------"<< std::endl;
   });
   }
 
-
+    // int num_threads = omp_get_max_threads();
+    // std::cout << "Number of OpenMP threads: " << num_threads << std::endl;
 
 
     // Compute kernel execution time
@@ -652,6 +652,9 @@ std::cout <<"----------------------------------------"<< std::endl;
       h_pipe[0] = sourceNode;
 
       uint32_t* usm_pipe_global   = malloc_device<uint32_t>(vertexCount, Queues[0]);
+      uint32_t* usm_pipe_global_   = malloc_device<uint32_t>(vertexCount, Queues[0]);
+      uint32_t* usm_pipe_read_pointer = usm_pipe_global; // Start with the first buffer
+      uint32_t* usm_pipe_write_pointer = usm_pipe_global_; // Start with the second buffer
       int* usm_dist    = malloc_device<int>(h_distance.back().size(), Queues[0]); 
     gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
       size_t offsetSize;
@@ -714,7 +717,7 @@ std::cout <<"----------------------------------------"<< std::endl;
 
 
     Queues[0].memcpy(frontierCountDevice, &zero, sizeof(uint32_t));  
- 
+
 
     double start_time = 0;
     double end_time = 0;
@@ -722,7 +725,7 @@ std::cout <<"----------------------------------------"<< std::endl;
       if((h_pipe_count[0]) == 0){
         break;
       }    
-       
+
 #if USE_GLOBAL_LOAD_BALANCE == 1  
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
               exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global,usm_local_indptr[gpuID], usm_visit_mask[gpuID],usm_visit[gpuID],ScanTempDevice[gpuID],ScanFullDevice[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1]- h_visit_offsets[gpuID]);
@@ -746,21 +749,29 @@ std::cout <<"----------------------------------------"<< std::endl;
       Queues[0].wait();
       copybackhostEvent = Queues[0].memcpy(frontierCountDevice, &zero, sizeof(uint32_t));
 #else
+      // Switch buffer for double buffering
+      if (iteration % 2 == 0) {
+          usm_pipe_read_pointer = usm_pipe_global;
+          usm_pipe_write_pointer = usm_pipe_global_;
+      } else {
+          usm_pipe_read_pointer = usm_pipe_global_;
+          usm_pipe_write_pointer = usm_pipe_global;
+      }
+      // #pragma omp parallel for
+      // Increases the execution time for 2 GPU to 8 ms for RMAT-21-64 ( 2.65 ms lowest we achieved)
+    // for (int gpuID = 0; gpuID < NUM_GPU; gpuID++) {
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-              exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global, usm_visit_mask[gpuID],usm_visit[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1]- h_visit_offsets[gpuID]);
-       
+        exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_read_pointer, usm_visit_mask[gpuID],usm_visit[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1]- h_visit_offsets[gpuID]);
+        levelEvent[gpuID] =   parallel_levelgen_kernel<gpuID>(Queues[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID],usm_visit_mask[gpuID],usm_visit[gpuID],iteration+1,usm_pipe_write_pointer,frontierCountDevice,usm_dist);
       });
-      gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-           Queues[gpuID].wait();
-      });
-      gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
 
-            levelEvent[gpuID] =parallel_levelgen_kernel<gpuID>(Queues[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID],usm_visit_mask[gpuID],usm_visit[gpuID],iteration+1,usm_pipe_global,frontierCountDevice,usm_dist);
-      });
+      /* Making sure that we wait for all GPUs to finish to count
+        the number of elements of the pipe for the next run
+        the buffer is shared among other GPUs 
+      */
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
             Queues[gpuID].wait();
       });
-
 
 
       copyToHost(Queues[0],frontierCountDevice,h_pipe_count);
@@ -807,7 +818,7 @@ std::cout <<"----------------------------------------"<< std::endl;
 
     sycl::free(usm_dist, Queues[0]);
     sycl::free(usm_pipe_global, Queues[0]);
-
+    sycl::free(usm_pipe_global_, Queues[0]);
     } // for loop num_runs
 
     #if VERBOSE == 1
