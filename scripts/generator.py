@@ -23,15 +23,21 @@ def nnzSplit(
     matrix: sparse.sparray, n_compute_units: int = 4,
 ) -> list[sparse.sparray]:
     nnz = matrix.getnnz(axis=1).cumsum()
+
     total = nnz[-1]
     ideal_breaks = np.arange(0, total, total/n_compute_units)
     break_idx = [*nnz.searchsorted(ideal_breaks),matrix.shape[0]]
     # make sure that break_idx is divisible by MAXIMUM_NUM_GPUs per node
     break_idx = [round8(x) for x in break_idx]
-    return [
-        matrix[i: j,:]
+    # return [
+    #     matrix[i: j,:]
+    #     for i, j in zip(break_idx[:-1], break_idx[1:])
+    # ]
+    partitions = [
+        matrix[i: j, :].astype(np.uint32)  # Ensures that the partitions are of type uint32
         for i, j in zip(break_idx[:-1], break_idx[1:])
     ]
+    return partitions
 
 def rowSplit(
     matrix: sparse.sparray, n_compute_units: int = 4,
@@ -59,11 +65,11 @@ def makeGraphList():
     # graphs = ["rmat-19-32"]
     return graphs
 
-def buildGraphManager(pick,csr = False):
+def buildGraphManager(dim,pick,csr = False):
     graphs = makeGraphList()
     for g in graphs:
         m = GraphMatrix()
-        graph = loadGraph(g)
+        graph = loadGraph(g,dim)
         print("PATH : ", localtxtFolder + g + ".txt")
         if (csr):
             g += "-" + pick + "-csr"
@@ -77,12 +83,12 @@ def buildGraphManager(pick,csr = False):
             m.prepareGraph(g, num_partition, graph,csr, pick)
         
       
-def buildGraphManagerSingle(name, pick, csr = False):
+def buildGraphManagerSingle(name,dim,pick, csr = False):
     g = name
     m = GraphMatrix()
 
     # Load the graph once outside the loop
-    graph = loadGraph(g)
+    graph = loadGraph(g,dim)
     print("PATH : ", localtxtFolder + g + ".txt")
     if (csr):
         g += "-" + pick + "-csr"
@@ -107,33 +113,29 @@ class GraphMatrix:
         self.copyCommandBuffer = []
 
     def serializeGraphData(self, graph, name, rootFolder,index,PrevRowsValue):
-        A = graph
         # Check that the data type is correct
-        if A.indices.dtype != np.uint32:
-            raise ValueError(f"A.indices must be of dtype np.uint32, but got {A.indices.dtype} instead")
-
-        if A.indptr.dtype != np.uint32:
-            raise ValueError(f"A.indptr must be of dtype np.uint32, but got {A.indptr.dtype} instead")
+        print(f"graph.indices dtype  {graph.indices.dtype}")
+        print(f"graph.indptr dtype  {graph.indptr.dtype}")
 
         # save index pointers
         fileName = rootFolder + "/" + name + "-indptr.bin"
         indPtrFile = open(fileName, "wb")
-        indPtrFile.write(A.indptr)
+        indPtrFile.write(graph.indptr)
         indPtrFile.close()
 
         # save indices
         fileName = rootFolder + "/" + name + "-inds.bin"
         indsFile = open(fileName, "wb")
-        A.indices = A.indices + PrevRowsValue
-        indsFile.write(A.indices)
+        graph.indices = graph.indices + PrevRowsValue
+        indsFile.write(graph.indices)
         indsFile.close()
 
-        print("Rows = " + str(A.shape[0]))
-        print("Cols = " + str(A.shape[1]))
-        print("NonZ = " + str(A.nnz))
+        print("Rows = " + str(graph.shape[0]))
+        print("Cols = " + str(graph.shape[1]))
+        print("NonZ = " + str(graph.nnz))
 
         # return the xmd command and new start address
-        return A.shape[0]
+        return graph.shape[0]
 
 
 
@@ -157,24 +159,23 @@ class GraphMatrix:
         metafileName = targetDir + "/" + graphName + "-meta.bin"
         metaDataFile = open(metafileName, "wb")
 
-        for i in range(0, partitionCount):
+        for i, part in enumerate(partitions):
             # savedRows = break_idx[i]
-            print ("Partition " + str(i))
+            print ("\n------------\n"+"Partition " + str(i) + "\n------------")
             # write the metadata base ptr into
             if (csr):
-                res = self.serializeGraphData(partitions[i], graphName + "-" + str(i),
+                res = self.serializeGraphData(part, graphName + "-" + str(i),
                                               targetDir,i,savedRows)
             else:
-                res = self.serializeGraphData(partitions[i], graphName + "-" + str(i),
+                res = self.serializeGraphData(part, graphName + "-" + str(i),
                                               targetDir,i,savedRows)
-            
             savedRows += res
-            metaDataFile.write(struct.pack("I", partitions[i].shape[0]))
-            metaDataFile.write(struct.pack("I", partitions[i].shape[1]))
-            metaDataFile.write(struct.pack("I", partitions[i].nnz))
+            metaDataFile.write(struct.pack("I", part.shape[0]))
+            metaDataFile.write(struct.pack("I", part.shape[1]))
+            metaDataFile.write(struct.pack("I", part.nnz))
             metaDataFile.write(struct.pack("I", startRow))
             #update start row
-            startRow += partitions[i].shape[0]  
+            startRow += part.shape[0]  
         
         metaDataFile.close()
         print ("Graph " + graphName + " prepared with " + str(partitionCount) + " partitions")
@@ -198,7 +199,7 @@ def count_comment_lines(filepath, comment_chars=['%', '%%']):
                 break
     return comment_line_count
 
-def loadGraph(matrix):
+def loadGraph(matrix,dim):
     name_matrix = str(matrix) + '.txt'
     path_to_go = localtxtFolder + name_matrix
     
@@ -227,12 +228,9 @@ def loadGraph(matrix):
     data = np.ones((len(arr[:, 0]),), dtype=np.uint32)
     row = arr[:, 0]
     col = arr[:, 1]
-    csr_matrix = sparse.csr_matrix((data,(row,col)))
-    rows = csr_matrix.shape[0]
-    cols = csr_matrix.shape[1]
-    if rows != cols:
-        dim = min(rows, cols)
-        csr_matrix = csr_matrix[0:dim, 0:dim]
+    csr_matrix = sparse.csr_matrix((data, (row, col)), shape=(dim, dim))
+
+
     return csr_matrix
 
 
@@ -247,8 +245,9 @@ def alignedIncrement(base, increment, align):
 if __name__ == '__main__':
     if(sys.argv[1] == "all"):
         partition_mode = sys.argv[2] ## nnz or row
-        buildGraphManager(partition_mode)
+        buildGraphManager(dim,partition_mode)
     else:
         dataset_name = sys.argv[1]
         partition_mode = sys.argv[2] ## nnz or row
-        buildGraphManagerSingle(dataset_name,partition_mode)
+        dim = int(sys.argv[3]) # number of nodes
+        buildGraphManagerSingle(dataset_name,dim,partition_mode)
