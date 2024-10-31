@@ -7,6 +7,7 @@ using namespace sycl;
 #include <vector>
 // #include <sycl/ext/intel/fpga_extensions.hpp>
 #include <bitset>
+#include <chrono>  // timer
 #include "functions.hpp"
 #include "unrolled_loop.hpp"
 #define MAX_NUM_LEVELS 100
@@ -84,8 +85,6 @@ void printExecutionTimes(const std::vector<double>& execution_timesA, const std:
 }
 
 
-
-
 // Function to find the first and last non-zero indices in a vector, ignoring the specified start index
 template <typename T>
 std::pair<std::optional<size_t>, std::optional<size_t>> find_first_last_nonzero(
@@ -129,17 +128,23 @@ void copyToHost(queue &Q, T *usm_arr,std::vector<T> &arr){
 }
 
 //-------------------------------------------------------------------
-// Return the execution time of the event, in seconds
+// Return the execution time of in milliseconds
 //-------------------------------------------------------------------
+class Timer {
+public:
+  Timer() : start_(std::chrono::steady_clock::now()) {}
 
+  // Get elapsed time in milliseconds
+  double Elapsed() {
+    auto now = std::chrono::steady_clock::now();
+    return std::chrono::duration_cast<Duration>(now - start_).count();
+  }
 
-double GetExecutionTime(const event &e) {
-  double start_k = e.get_profiling_info<info::event_profiling::command_start>();
-  double end_k = e.get_profiling_info<info::event_profiling::command_end>();
-  double kernel_time = (end_k - start_k) * 1e-6; // ns to ms
-  return kernel_time;
-}
-
+private:
+  using Duration = std::chrono::duration<double, std::milli>;
+  std::chrono::steady_clock::time_point start_;
+  bool is_running_;
+};
 
 
 //-------------------------------------------------------------------
@@ -169,7 +174,7 @@ class LevelGen;
 
 #if USE_GLOBAL_LOAD_BALANCE == 1  
 template <int krnl_id>
-event parallel_explorer_kernel(queue &q,
+void parallel_explorer_kernel(queue &q,
                                 const uint32_t V,
                                 uint32_t* usm_nodes_start,
                                 uint32_t *usm_edges,
@@ -377,12 +382,11 @@ event parallel_explorer_kernel(queue &q,
       */
       #endif
 
-  return e1; 
 }
 #else
 
 template <int krnl_id>
-event parallel_explorer_kernel(queue &q,
+void parallel_explorer_kernel(queue &q,
                                 const uint32_t V,
                                 uint32_t* usm_nodes_start,
                                 uint32_t *usm_edges,
@@ -403,7 +407,7 @@ event parallel_explorer_kernel(queue &q,
       // Setup the range
       nd_range<1> range(global_size, local_size);
 
-      auto e = q.submit([&](handler& h) {
+       q.submit([&](handler& h) {
             // Local memory for exclusive sum, shared within the work-group
             sycl::local_accessor<uint32_t> edge_pointer(local_size, h);
             sycl::local_accessor<uint32_t> degrees(local_size, h);
@@ -470,14 +474,12 @@ event parallel_explorer_kernel(queue &q,
       });
           });
 
-
-  return e; 
 }
 #endif
 
 #if USE_GLOBAL_LOAD_BALANCE == 1  
 template <int krnl_id>
-event parallel_levelgen_kernel(queue &q,
+void parallel_levelgen_kernel(queue &q,
                                 const uint32_t Vstart,
                                 const uint32_t Vsize,
                                 uint8_t *usm_visit_mask,
@@ -492,7 +494,7 @@ event parallel_levelgen_kernel(queue &q,
     const size_t global_size = ((Vsize + local_size - 1) / local_size) * local_size;
     // Setup the range
     nd_range<1> range(global_size, local_size);
-        auto e = q.submit([&](handler& h) {
+         q.submit([&](handler& h) {
         h.parallel_for<class LevelGen<krnl_id>>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
             const int gid = item.get_global_id(0);    // global id
 
@@ -508,12 +510,12 @@ event parallel_levelgen_kernel(queue &q,
 
         });
         });
-return e;
+
 }
 #else
 
 template <int krnl_id>
-event parallel_levelgen_kernel(queue &q,
+void parallel_levelgen_kernel(queue &q,
                                 const uint32_t Vstart,
                                 const uint32_t Vsize,
                                 uint8_t *usm_visit_mask,
@@ -530,7 +532,7 @@ event parallel_levelgen_kernel(queue &q,
 
     // Setup the range
     nd_range<1> range(global_size, local_size);
-        auto e = q.submit([&](handler& h) {
+         q.submit([&](handler& h) {
         h.parallel_for<class LevelGen<krnl_id>>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
           // const int gid = item.get_global_id(0);    // global id
           
@@ -552,7 +554,6 @@ event parallel_levelgen_kernel(queue &q,
 
         });
         });
-return e;
 }
 #endif
 
@@ -627,9 +628,6 @@ std::cout <<"----------------------------------------"<< std::endl;
 
 
     // Compute kernel execution time
-    std::vector<sycl::event> levelEvent(NUM_GPU);
-    std::vector<sycl::event> exploreEvent(NUM_GPU);
-    sycl::event copybackhostEvent;
     std::vector<double> explore_times(NUM_GPU,0);
     std::vector<double> levelgen_times(NUM_GPU,0);
 
@@ -708,26 +706,19 @@ std::cout <<"----------------------------------------"<< std::endl;
     uint32_t *frontierCountDevice = malloc_device<uint32_t>(1, Queues[0]);
 
 
-
-
-
-
-
     copyToDevice(Queues[0],h_pipe,usm_pipe_global);
     copyToDevice(Queues[0],h_distance[i],usm_dist);
 
-
-
-
     Queues[0].memcpy(frontierCountDevice, &zero, sizeof(uint32_t));  
 
-
+    Timer timer;
     double start_time = 0;
     double end_time = 0;
     for(int iteration=0; iteration < MAX_NUM_LEVELS; iteration++){
       if((h_pipe_count[0]) == 0){
         break;
       }    
+      
       // Switch buffer for double buffering
       if (iteration % 2 == 0) {
           usm_pipe_read_pointer = usm_pipe_global;
@@ -736,38 +727,19 @@ std::cout <<"----------------------------------------"<< std::endl;
           usm_pipe_read_pointer = usm_pipe_global_;
           usm_pipe_write_pointer = usm_pipe_global;
       }
+     
 #if USE_GLOBAL_LOAD_BALANCE == 1  
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-              exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_read_pointer,usm_local_indptr[gpuID], usm_visit_mask[gpuID],usm_visit[gpuID],ScanTempDevice[gpuID],ScanFullDevice[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1]- h_visit_offsets[gpuID]);
-       
-      // });
-      // no longer needed with in-order queues
-      /*gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-           Queues[gpuID].wait();
-      });*/
-      // gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-
-            levelEvent[gpuID] =parallel_levelgen_kernel<gpuID>(Queues[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID],usm_visit_mask[gpuID],usm_visit[gpuID],iteration+1,usm_pipe_write_pointer,frontierCountDevice,usm_dist);
+            parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_read_pointer,usm_local_indptr[gpuID], usm_visit_mask[gpuID],usm_visit[gpuID],ScanTempDevice[gpuID],ScanFullDevice[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1]- h_visit_offsets[gpuID]);
+            parallel_levelgen_kernel<gpuID>(Queues[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID],usm_visit_mask[gpuID],usm_visit[gpuID],iteration+1,usm_pipe_write_pointer,frontierCountDevice,usm_dist);
       });
-      gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-            Queues[gpuID].wait();
-      });
-
-
-
-      copyToHost(Queues[0],frontierCountDevice,h_pipe_count);
-      Queues[0].wait();
-      copybackhostEvent = Queues[0].memcpy(frontierCountDevice, &zero, sizeof(uint32_t));
 #else
-
-      // #pragma omp parallel for
-      // Increases the execution time for 2 GPU to 8 ms for RMAT-21-64 ( 2.65 ms lowest we achieved)
     // for (int gpuID = 0; gpuID < NUM_GPU; gpuID++) {
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-        exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_read_pointer, usm_visit_mask[gpuID],usm_visit[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1]- h_visit_offsets[gpuID]);
-        levelEvent[gpuID] =   parallel_levelgen_kernel<gpuID>(Queues[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID],usm_visit_mask[gpuID],usm_visit[gpuID],iteration+1,usm_pipe_write_pointer,frontierCountDevice,usm_dist);
+        parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_read_pointer, usm_visit_mask[gpuID],usm_visit[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1]- h_visit_offsets[gpuID]);
+        parallel_levelgen_kernel<gpuID>(Queues[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID],usm_visit_mask[gpuID],usm_visit[gpuID],iteration+1,usm_pipe_write_pointer,frontierCountDevice,usm_dist);
       });
-
+#endif
       /* Making sure that we wait for all GPUs to finish to count
         the number of elements of the pipe for the next run
         the buffer is shared among other GPUs 
@@ -775,35 +747,22 @@ std::cout <<"----------------------------------------"<< std::endl;
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
             Queues[gpuID].wait();
       });
-
-
       copyToHost(Queues[0],frontierCountDevice,h_pipe_count);
       Queues[0].wait();
-      copybackhostEvent = Queues[0].memcpy(frontierCountDevice, &zero, sizeof(uint32_t));
-#endif
-
-
+      Queues[0].memcpy(frontierCountDevice, &zero, sizeof(uint32_t));
       // Capture execution times 
       #if VERBOSE == 1
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-      explore_times[gpuID]     += GetExecutionTime(exploreEvent[gpuID]);
-      levelgen_times[gpuID]     += GetExecutionTime(levelEvent[gpuID]);
+      // explore_times[gpuID]     += GetExecutionTime(exploreEvent[gpuID]);
+      // levelgen_times[gpuID]     += GetExecutionTime(levelEvent[gpuID]);
       if(i==0)
         std::cout << std::setw(13) << h_pipe_count[0] << " new nodes after iteration " << std::setw(2) << iteration << std::endl;
       });
       #endif
 
       
-      if(iteration == 0){
-           start_time = exploreEvent[0].get_profiling_info<info::event_profiling::command_start>();
-      }
-      
     }
-      
-      end_time = copybackhostEvent.get_profiling_info<info::event_profiling::command_end>();
-      // end_time = max(levelEvent.get_profiling_info<info::event_profiling::command_end>(),levelEventQ.get_profiling_info<info::event_profiling::command_end>());
-      double total_time = (end_time - start_time)* 1e-6; // ns to ms
-      run_times[i] = total_time;
+      run_times[i] = timer.Elapsed();
       copyToHost(Queues[0],usm_dist,h_distance[i]);
       Queues[0].wait();
 
