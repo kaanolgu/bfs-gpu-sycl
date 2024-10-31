@@ -477,42 +477,6 @@ void parallel_explorer_kernel(queue &q,
 }
 #endif
 
-#if USE_GLOBAL_LOAD_BALANCE == 1  
-template <int krnl_id>
-void parallel_levelgen_kernel(queue &q,
-                                const uint32_t Vstart,
-                                const uint32_t Vsize,
-                                uint8_t *usm_visit_mask,
-                                uint8_t *usm_visit,
-                                const int level_plus_one,
-                                uint32_t *usm_pipe,
-                                uint32_t *usm_pipe_size,
-                                int* usm_dist
-                                 ){
-   // Define the work-group size and the number of work-groups
-    const size_t local_size = q.get_device().get_info<info::device::max_work_group_size>();  // Number of work-items per work-group
-    const size_t global_size = ((Vsize + local_size - 1) / local_size) * local_size;
-    // Setup the range
-    nd_range<1> range(global_size, local_size);
-         q.submit([&](handler& h) {
-        h.parallel_for<class LevelGen<krnl_id>>(range, [=](nd_item<1> item) [[intel::kernel_args_restrict]] {
-            const int gid = item.get_global_id(0);    // global id
-
-          if (gid < Vsize) {
-              uint8_t vmask = usm_visit_mask[gid];
-              if(vmask == 1){
-                usm_dist[gid + Vstart] = level_plus_one;  
-                usm_visit_mask[gid] = 0;
-                sycl::atomic_ref<uint32_t, sycl::memory_order::relaxed,sycl::memory_scope::system, sycl::access::address_space::global_space> atomic_op_global(usm_pipe_size[0]);
-                usm_pipe[atomic_op_global.fetch_add(1)] = gid + Vstart;
-              }
-          }
-
-        });
-        });
-
-}
-#else
 
 template <int krnl_id>
 void parallel_levelgen_kernel(queue &q,
@@ -555,7 +519,7 @@ void parallel_levelgen_kernel(queue &q,
         });
         });
 }
-#endif
+
 
 
           
@@ -728,18 +692,16 @@ std::cout <<"----------------------------------------"<< std::endl;
           usm_pipe_write_pointer = usm_pipe_global;
       }
      
-#if USE_GLOBAL_LOAD_BALANCE == 1  
-      gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-            parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_read_pointer,usm_local_indptr[gpuID], usm_visit_mask[gpuID],usm_visit[gpuID],ScanTempDevice[gpuID],ScanFullDevice[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1]- h_visit_offsets[gpuID]);
-            parallel_levelgen_kernel<gpuID>(Queues[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID],usm_visit_mask[gpuID],usm_visit[gpuID],iteration+1,usm_pipe_write_pointer,frontierCountDevice,usm_dist);
-      });
-#else
     // for (int gpuID = 0; gpuID < NUM_GPU; gpuID++) {
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-        parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_read_pointer, usm_visit_mask[gpuID],usm_visit[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1]- h_visit_offsets[gpuID]);
-        parallel_levelgen_kernel<gpuID>(Queues[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID],usm_visit_mask[gpuID],usm_visit[gpuID],iteration+1,usm_pipe_write_pointer,frontierCountDevice,usm_dist);
+        #if USE_GLOBAL_LOAD_BALANCE == 1  
+            parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_read_pointer,usm_local_indptr[gpuID], usm_visit_mask[gpuID],usm_visit[gpuID],ScanTempDevice[gpuID],ScanFullDevice[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1]- h_visit_offsets[gpuID]);
+        #else
+            parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_read_pointer, usm_visit_mask[gpuID],usm_visit[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1]- h_visit_offsets[gpuID]);
+        #endif
+            parallel_levelgen_kernel<gpuID>(Queues[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID],usm_visit_mask[gpuID],usm_visit[gpuID],iteration+1,usm_pipe_write_pointer,frontierCountDevice,usm_dist);
       });
-#endif
+
       /* Making sure that we wait for all GPUs to finish to count
         the number of elements of the pipe for the next run
         the buffer is shared among other GPUs 

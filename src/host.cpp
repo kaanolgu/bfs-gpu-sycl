@@ -91,7 +91,11 @@ int main(int argc, char * argv[])
     #if USE_GLOBAL_LOAD_BALANCE == 1
     std::cout << std::setw(20) << std::left << "- load balance" << std::setw(20) << "[GLOBAL]" << std::endl;
     #else
-    std::cout << std::setw(20) << std::left << "- load balance" << std::setw(20) << "[LOCAL]" << std::endl;
+        #if USE_STRIDED_LOCAL_LOAD_BALANCE
+        std::cout << std::setw(20) << std::left << "- load balance" << std::setw(20) << "[STRIDED-LOCAL]" << std::endl;    
+        #else
+        std::cout << std::setw(20) << std::left << "- load balance" << std::setw(20) << "[LOCAL]" << std::endl;
+        #endif
     #endif
       std::cout <<"----------------------------------------"<< std::endl;
   // Sanity Check if we loaded the graph properly
@@ -163,7 +167,9 @@ std::cout <<"----------------------------------------"<< std::endl;
   run_bfs_cpu(numCols,graph_cpu.indptr,graph_cpu.inds, host_graph_mask, host_updating_graph_mask, host_graph_visited, host_level,newJsonObj,h_visit_offsets,host_run_statistics);
 
   // Select the element with the maximum value
-  auto it = std::max_element(host_level.begin(), host_level.end());
+  // Use GPU results because in large scales we won't have CPU results to validate
+  // We could validate by running local and global models and cross check
+  auto it = std::max_element(h_distancesGPU[0].begin(), h_distancesGPU[0].end());
   // Check if iterator is not pointing to the end of vector
   int maxLevelCPU = (*it +2);
     std::cout <<"----------------------------------------"<< std::endl;
