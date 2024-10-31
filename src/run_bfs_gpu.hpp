@@ -185,11 +185,11 @@ event parallel_explorer_kernel(queue &q,
       /*
       uint32_t* debug   = malloc_device<uint32_t>(128, q);
       */
-
       // Define the work-group size and the number of work-groups
-      const size_t local_size = LOCAL_WORK_SIZE;  // Number of work-items per work-group
+      const size_t sm_count = q.get_device().get_info<info::device::max_compute_units>();
+      const size_t local_size = q.get_device().get_info<info::device::max_work_group_size>();  // Number of work-items per work-group
       const size_t global_size1 = ((V + local_size - 1) / local_size) * local_size;
-      const size_t global_size4 = SM_COUNT * SM_FACTOR * LOCAL_WORK_SIZE;
+      const size_t global_size4 = sm_count * SM_FACTOR * local_size;
 
       // Setup the range
       nd_range<1> range1(global_size1, local_size);
@@ -396,7 +396,7 @@ event parallel_explorer_kernel(queue &q,
 
 
       // Define the work-group size and the number of work-groups
-      const size_t local_size = LOCAL_WORK_SIZE;  // Number of work-items per work-group
+      const size_t local_size = q.get_device().get_info<info::device::max_work_group_size>();  // Number of work-items per work-group
       const size_t global_size = ((V + local_size - 1) / local_size) * local_size;
 
       const size_t V_stride = ((V + local_size - 1) / local_size);
@@ -488,7 +488,7 @@ event parallel_levelgen_kernel(queue &q,
                                 int* usm_dist
                                  ){
    // Define the work-group size and the number of work-groups
-    const size_t local_size = LOCAL_WORK_SIZE;  // Number of work-items per work-group
+    const size_t local_size = q.get_device().get_info<info::device::max_work_group_size>();  // Number of work-items per work-group
     const size_t global_size = ((Vsize + local_size - 1) / local_size) * local_size;
     // Setup the range
     nd_range<1> range(global_size, local_size);
@@ -524,7 +524,7 @@ event parallel_levelgen_kernel(queue &q,
                                 int* usm_dist
                                  ){
    // Define the work-group size and the number of work-groups
-    const size_t local_size = LOCAL_WORK_SIZE;  // Number of work-items per work-group
+    const size_t local_size = q.get_device().get_info<info::device::max_work_group_size>();  // Number of work-items per work-group
     const size_t global_size = ((Vsize + local_size - 1) / local_size) * local_size;
     const size_t V_stride = (Vsize + local_size - 1) / local_size;
 
@@ -599,6 +599,9 @@ void GPURun(uint32_t vertexCount,
 
   }
   }
+    std::cout << "Number of SMs : " <<  Queues[0].get_device().get_info<info::device::max_compute_units>() << std::endl;
+    std::cout << "Max LOCAL_WORK_SIZE : " <<  Queues[0].get_device().get_info<info::device::max_work_group_size>() << std::endl;
+    
     std::cout <<"\n----------------------------------------"<< std::endl;
 
     std::cout << "Running on devices:" << std::endl;
@@ -674,7 +677,7 @@ std::cout <<"----------------------------------------"<< std::endl;
       usm_visit[gpuID]    = malloc_device<uint8_t>((h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID]), Queues[gpuID]); 
 #if USE_GLOBAL_LOAD_BALANCE == 1
 
-      const uint32_t scanTempSize = (offsetSize-1 + LOCAL_WORK_SIZE - 1) / LOCAL_WORK_SIZE;
+      const uint32_t scanTempSize = (offsetSize-1 + Queues[0].get_device().get_info<info::device::max_work_group_size>() - 1) / Queues[0].get_device().get_info<info::device::max_work_group_size>();
       usm_local_indptr[gpuID]   = malloc_device<uint32_t>((offsetSize), Queues[gpuID]);
       const uint32_t scanFullSize = offsetSize; //offsetSize;
       ScanTempDevice[gpuID]   = malloc_device<uint32_t>(scanTempSize, Queues[gpuID]);
@@ -725,19 +728,26 @@ std::cout <<"----------------------------------------"<< std::endl;
       if((h_pipe_count[0]) == 0){
         break;
       }    
-
+      // Switch buffer for double buffering
+      if (iteration % 2 == 0) {
+          usm_pipe_read_pointer = usm_pipe_global;
+          usm_pipe_write_pointer = usm_pipe_global_;
+      } else {
+          usm_pipe_read_pointer = usm_pipe_global_;
+          usm_pipe_write_pointer = usm_pipe_global;
+      }
 #if USE_GLOBAL_LOAD_BALANCE == 1  
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
-              exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_global,usm_local_indptr[gpuID], usm_visit_mask[gpuID],usm_visit[gpuID],ScanTempDevice[gpuID],ScanFullDevice[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1]- h_visit_offsets[gpuID]);
+              exploreEvent[gpuID] = parallel_explorer_kernel<gpuID>(Queues[gpuID],h_pipe_count[0],OffsetDevice[gpuID],EdgesDevice[gpuID],usm_pipe_read_pointer,usm_local_indptr[gpuID], usm_visit_mask[gpuID],usm_visit[gpuID],ScanTempDevice[gpuID],ScanFullDevice[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1]- h_visit_offsets[gpuID]);
        
-      });
+      // });
       // no longer needed with in-order queues
       /*gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
            Queues[gpuID].wait();
       });*/
-      gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
+      // gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
 
-            levelEvent[gpuID] =parallel_levelgen_kernel<gpuID>(Queues[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID],usm_visit_mask[gpuID],usm_visit[gpuID],iteration+1,usm_pipe_global,frontierCountDevice,usm_dist);
+            levelEvent[gpuID] =parallel_levelgen_kernel<gpuID>(Queues[gpuID],h_visit_offsets[gpuID],h_visit_offsets[gpuID+1] - h_visit_offsets[gpuID],usm_visit_mask[gpuID],usm_visit[gpuID],iteration+1,usm_pipe_write_pointer,frontierCountDevice,usm_dist);
       });
       gpu_tools::UnrolledLoop<NUM_GPU>([&](auto gpuID) {
             Queues[gpuID].wait();
@@ -749,14 +759,7 @@ std::cout <<"----------------------------------------"<< std::endl;
       Queues[0].wait();
       copybackhostEvent = Queues[0].memcpy(frontierCountDevice, &zero, sizeof(uint32_t));
 #else
-      // Switch buffer for double buffering
-      if (iteration % 2 == 0) {
-          usm_pipe_read_pointer = usm_pipe_global;
-          usm_pipe_write_pointer = usm_pipe_global_;
-      } else {
-          usm_pipe_read_pointer = usm_pipe_global_;
-          usm_pipe_write_pointer = usm_pipe_global;
-      }
+
       // #pragma omp parallel for
       // Increases the execution time for 2 GPU to 8 ms for RMAT-21-64 ( 2.65 ms lowest we achieved)
     // for (int gpuID = 0; gpuID < NUM_GPU; gpuID++) {
