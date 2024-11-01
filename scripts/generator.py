@@ -170,10 +170,10 @@ class GraphMatrix:
                 res = self.serializeGraphData(part, graphName + "-" + str(i),
                                               targetDir,i,savedRows)
             savedRows += res
-            metaDataFile.write(struct.pack("I", part.shape[0]))
-            metaDataFile.write(struct.pack("I", part.shape[1]))
-            metaDataFile.write(struct.pack("I", part.nnz))
-            metaDataFile.write(struct.pack("I", startRow))
+            metaDataFile.write(struct.pack("I", part.shape[0]))  # uint32
+            metaDataFile.write(struct.pack("I", part.shape[1]))  # uint32
+            metaDataFile.write(struct.pack("Q", part.nnz))       # uint64
+            metaDataFile.write(struct.pack("I", startRow))       # uint32
             #update start row
             startRow += part.shape[0]  
         
@@ -228,8 +228,10 @@ def loadGraph(matrix,dim):
     data = np.ones((len(arr[:, 0]),), dtype=np.uint32)
     row = arr[:, 0]
     col = arr[:, 1]
+    if dim is None:
+        dim = max(np.max(row), np.max(col)) + 1 # Ensure `dim` covers all indices
     csr_matrix = sparse.csr_matrix((data, (row, col)), shape=(dim, dim))
-
+    
 
     return csr_matrix
 
@@ -249,5 +251,5 @@ if __name__ == '__main__':
     else:
         dataset_name = sys.argv[1]
         partition_mode = sys.argv[2] ## nnz or row
-        dim = int(sys.argv[3]) # number of nodes
+        dim = int(sys.argv[3]) if len(sys.argv) == 4 else None # number of nodes
         buildGraphManagerSingle(dataset_name,dim,partition_mode)

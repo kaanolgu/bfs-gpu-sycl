@@ -82,7 +82,7 @@ int main(int argc, char * argv[])
   CSRGraph graph_cpu = loadMatrix(1,datasetName);
 
   uint32_t numCols = graph_cpu.meta[1];  // cols -> total number of vertices
-  uint32_t numEdges  = graph_cpu.meta[2];  // nonZ count -> total edges
+  uint64_t numEdges  = graph_cpu.meta[2];  // nonZ count -> total edges
   uint32_t numRows   = graph_cpu.meta[0];  // this it the value we want! (rows)
       std::cout << std::setw(20) << std::left << "- # vertices" << std::setw(20) << numRows << std::endl;
       std::cout << std::setw(20) << std::left << "- # edges" << std::setw(20) << numEdges << std::endl;
@@ -186,7 +186,7 @@ std::cout <<"----------------------------------------"<< std::endl;
     newJsonObj["avgMTEPS"] = (static_cast<unsigned int>(newJsonObj["edgesCount"])/(1000000*static_cast<double>(newJsonObj["avgExecutionTime"])*1e-3));
     newJsonObj["avgMTEPSFilter"] = (static_cast<unsigned int>(newJsonObj["edgesCount"])/(1000000*static_cast<double>(newJsonObj["avgExecutionTimeFiltered"])*1e-3));
     newJsonObj["maxMTEPSFilter"] = (static_cast<unsigned int>(newJsonObj["edgesCount"])/(1000000*static_cast<double>(newJsonObj["minExecutionTimeFiltered"])*1e-3));
-    newJsonObj["edgesCoverage"] = static_cast<double>(newJsonObj["edgesCount"]) / numEdges * 100.0;
+    newJsonObj["edgesCoverage"] = static_cast<uint64_t>(newJsonObj["edgesCount"]) / numEdges * 100.0;
     // Add counts from the second dimension (A.back()) directly into "Levels" key
     for (int i = 0; i < maxLevelCPU - 1; i++) {
         int countA = std::count(h_distancesGPU.back().begin(), h_distancesGPU.back().end(), i);

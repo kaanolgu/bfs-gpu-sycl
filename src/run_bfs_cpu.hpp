@@ -14,7 +14,7 @@ void run_bfs_cpu(uint32_t no_of_nodes,
   std::vector<uint32_t> &h_visit_offsets,
     std::vector<DeviceInfo> &host_run_statistics){
   char stop;
-  uint32_t exploredEdgesCount = 0;
+  uint64_t exploredEdgesCount = 0;
   #if VERBOSE == 1  
   std::vector<uint32_t> Edgecounts(NUM_GPU, 0);
   #endif
