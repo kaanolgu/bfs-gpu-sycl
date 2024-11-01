@@ -81,9 +81,9 @@ int main(int argc, char * argv[])
   CSRGraph graph = loadMatrix(NUM_GPU,datasetName);
   CSRGraph graph_cpu = loadMatrix(1,datasetName);
 
-  uint32_t numCols = graph_cpu.meta[1];  // cols -> total number of vertices
-  uint64_t numEdges  = graph_cpu.meta[2];  // nonZ count -> total edges
-  uint32_t numRows   = graph_cpu.meta[0];  // this it the value we want! (rows)
+  uint32_t numCols = graph_cpu.meta32[1];  // cols -> total number of vertices
+  uint64_t numEdges  = graph_cpu.meta64[0];  // nonZ count -> total edges
+  uint32_t numRows   = graph_cpu.meta32[0];  // this it the value we want! (rows)
       std::cout << std::setw(20) << std::left << "- # vertices" << std::setw(20) << numRows << std::endl;
       std::cout << std::setw(20) << std::left << "- # edges" << std::setw(20) << numEdges << std::endl;
       std::cout << std::setw(20) << std::left << "- dataset" << std::setw(20) << "Load [OK]" << std::endl;
@@ -118,8 +118,8 @@ int main(int argc, char * argv[])
 
     std::vector<uint32_t> selected = {0}; // Start with 0
     // Select elements at indices that are multiples of 4
-    for (size_t i = 0; i < graph.meta.size(); i += 4) {
-        selected.push_back(graph.meta[i]);
+    for (size_t i = 0; i < graph.meta32.size(); i += 3) {
+        selected.push_back(graph.meta32[i]);
     }
 
     
@@ -128,8 +128,8 @@ int main(int argc, char * argv[])
 
 
   #if VERBOSE ==1 
-for (size_t i = 0; i < graph.meta.size(); i += 1) {
-    std::cout << "graph meta[" << i <<"]: "<<  graph.meta[i] << std::endl;
+for (size_t i = 0; i < graph.meta32.size(); i += 1) {
+    std::cout << "graph meta32[" << i <<"]: "<<  graph.meta32[i] << std::endl;
 }
 
 for( uint32_t i =0; i < h_visit_offsets.size(); i++)
@@ -138,9 +138,9 @@ std::cout <<"----------------------------------------"<< std::endl;
 #endif
 
   if(NUM_GPU > 1){
-    GPURun(numRows,graph.indsMulti,graph.indptrMulti,h_updating_graph_mask,h_graph_visited,h_distancesGPU,start_vertex,num_runs,newJsonObj,h_visit_offsets);  
+    GPURun(numCols,graph.indsMulti,graph.indptrMulti,h_updating_graph_mask,h_graph_visited,h_distancesGPU,start_vertex,num_runs,newJsonObj,h_visit_offsets);  
   }else{
-    GPURun(numRows,graph.inds,graph.indptr,h_updating_graph_mask,h_graph_visited,h_distancesGPU,start_vertex,num_runs,newJsonObj,h_visit_offsets); 
+    GPURun(numCols,graph.inds,graph.indptr,h_updating_graph_mask,h_graph_visited,h_distancesGPU,start_vertex,num_runs,newJsonObj,h_visit_offsets); 
   }
 
   

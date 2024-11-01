@@ -6,7 +6,8 @@
 // CSR structure to hold the graph
 struct CSRGraph {
     // Use single vectors for when partitionCount is 1
-    std::vector<uint32_t> meta;
+    std::vector<uint32_t> meta32;
+    std::vector<uint64_t> meta64;
     std::vector<uint32_t> indptr;
     std::vector<uint32_t> inds;
 
@@ -45,7 +46,50 @@ void readFromMM(const char *filename, std::vector<uint32_t> &buffer) {
     std::cout << " OK" << std::endl;
     #endif
 }
+void readFromMM_meta(const char *filename, std::vector<uint32_t> &buffer32, std::vector<uint64_t> &buffer64) {
+    #if VERBOSE == 1
+    std::cout << "- Reading " << filename << "..." ;
+    #endif
+    std::ifstream file(filename, std::ios::binary);
+    if (!file) {
+        std::cerr << "ERROR: File " << filename << " not found!" << std::endl;
+        throw std::runtime_error("File not found");
+    }
 
+    // Reading data in the specified pattern
+    uint32_t data32;
+    uint64_t data64;
+    while (file) {
+        // Read the first 4-byte integer
+        file.read(reinterpret_cast<char*>(&data32), sizeof(uint32_t));
+        if (!file) break; // Check for EOF
+        buffer32.push_back(data32);
+
+        // Read the second 4-byte integer
+        file.read(reinterpret_cast<char*>(&data32), sizeof(uint32_t));
+        if (!file) break;
+        buffer32.push_back(data32);
+
+        // Read the 8-byte integer
+        file.read(reinterpret_cast<char*>(&data64), sizeof(uint64_t));
+        if (!file) break;
+        buffer64.push_back(data64);
+
+        // Read the final 4-byte integer
+        file.read(reinterpret_cast<char*>(&data32), sizeof(uint32_t));
+        if (!file) break;
+        buffer32.push_back(data32);
+    }
+
+    if (file.bad()) {
+        std::cerr << "ERROR: Error reading file " << filename << std::endl;
+        throw std::runtime_error("Error reading file");
+    }
+
+#if VERBOSE == 1
+    std::cout << " OK" << std::endl;
+    #endif
+}
 CSRGraph loadMatrix(uint32_t partitionCount, std::string datasetName) {
     CSRGraph graph;
     #if VERBOSE == 1
@@ -56,7 +100,7 @@ CSRGraph loadMatrix(uint32_t partitionCount, std::string datasetName) {
     std::string temp = datasetName;
     non_switch += temp + "-csc-" + std::to_string(partitionCount) + "/" + temp + "-csc-";
     std::string str_meta = non_switch + "meta.bin";
-    readFromMM(str_meta.c_str(), graph.meta);
+    readFromMM_meta(str_meta.c_str(), graph.meta32,graph.meta64);
     
     if (partitionCount == 1) {
         // Load data into single-dimensional vectors

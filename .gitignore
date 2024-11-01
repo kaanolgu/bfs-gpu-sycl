@@ -10,3 +10,4 @@ data.json
 *.out
 *.nsys*
 *.ncu*
+run-logs/
