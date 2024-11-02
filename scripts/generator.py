@@ -120,14 +120,23 @@ class GraphMatrix:
         # save index pointers
         fileName = rootFolder + "/" + name + "-indptr.bin"
         indPtrFile = open(fileName, "wb")
-        indPtrFile.write(graph.indptr)
+        # Convert `indptr` to uint32 if it’s not already
+        indptr_data = graph.indptr
+        if indptr_data.dtype != np.uint32:
+            if graph.nnz <= np.iinfo(np.uint32).max:
+                indptr_data = indptr_data.astype(np.uint32)
+
+        indPtrFile.write(indptr_data.tobytes())
         indPtrFile.close()
 
         # save indices
         fileName = rootFolder + "/" + name + "-inds.bin"
         indsFile = open(fileName, "wb")
-        graph.indices = graph.indices + PrevRowsValue
-        indsFile.write(graph.indices)
+        indices_data =  graph.indices + PrevRowsValue
+        if indices_data.dtype != np.uint32:
+            if graph.nnz <= np.iinfo(np.uint32).max:
+                indices_data = indices_data.astype(np.uint32)
+        indsFile.write(indices_data.tobytes())
         indsFile.close()
 
         print("Rows = " + str(graph.shape[0]))
@@ -213,7 +222,7 @@ def loadGraph(matrix,dim):
         "hollywood-2009.txt",
         "europe_osm.txt"
     ]
-
+    # TODO: This is just a placeholder here, mtx matrices needs to be converted to edge list here
     # Check if path_to_go matches any of the filenames
     if name_matrix in file_names_from_mtx:
         print(f"{path_to_go} is in the list of target filenames.")
