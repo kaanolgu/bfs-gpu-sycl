@@ -79,15 +79,20 @@ int main(int argc, char * argv[])
   
 
   CSRGraph graph = loadMatrix(NUM_GPU,datasetName);
-  CSRGraph graph_cpu = loadMatrix(1,datasetName);
+  uint32_t numRows =0;
+  uint64_t numEdges = 0;
 
-  uint32_t numCols = graph_cpu.meta32[1];  // cols -> total number of vertices
-  uint64_t numEdges  = graph_cpu.meta64[0];  // nonZ count -> total edges
-  uint32_t numRows   = graph_cpu.meta32[0];  // this it the value we want! (rows)
-      std::cout << std::setw(20) << std::left << "- # vertices" << std::setw(20) << numRows << std::endl;
+  uint32_t numCols = graph.meta32[1]; // cols -> total number of vertices
+    for (size_t i = 0; i < graph.meta32.size(); i += 3) {
+        numRows += graph.meta32[i + 0];
+    }
+    for (size_t i = 0; i < graph.meta64.size(); i += 1) {
+        numEdges += graph.meta64[i + 0]; // nonZ count -> total edges
+    }
+
+      std::cout << std::setw(20) << std::left << "- # vertices" << std::setw(20) << numCols << std::endl;
       std::cout << std::setw(20) << std::left << "- # edges" << std::setw(20) << numEdges << std::endl;
       std::cout << std::setw(20) << std::left << "- dataset" << std::setw(20) << "Load [OK]" << std::endl;
-      
     #if USE_GLOBAL_LOAD_BALANCE == 1
     std::cout << std::setw(20) << std::left << "- load balance" << std::setw(20) << "[GLOBAL]" << std::endl;
     #else
@@ -98,8 +103,9 @@ int main(int argc, char * argv[])
         #endif
     #endif
       std::cout <<"----------------------------------------"<< std::endl;
-  // Sanity Check if we loaded the graph properly
-  assert(numRows <= numCols);
+   // Sanity check if we loaded graph properly
+   assert(numRows <= numCols);
+ 
 
 
   // GPU
@@ -109,7 +115,6 @@ int main(int argc, char * argv[])
   std::vector<uint32_t> h_graph_nodes_start;
   std::vector<uint8_t> h_updating_graph_mask(numCols,0);
   std::vector<uint8_t> h_graph_visited(numCols,0);
-
 
   
   h_graph_visited[start_vertex]=1;
@@ -163,9 +168,11 @@ std::cout <<"----------------------------------------"<< std::endl;
   host_level[start_vertex]=0; 
   std::vector<DeviceInfo> host_run_statistics;
 
-
-  run_bfs_cpu(numCols,graph_cpu.indptr,graph_cpu.inds, host_graph_mask, host_updating_graph_mask, host_graph_visited, host_level,newJsonObj,h_visit_offsets,host_run_statistics);
-
+  if(NUM_GPU > 1){
+    run_bfs_cpu(numCols,graph.indptrMulti,graph.indsMulti, host_graph_mask, host_updating_graph_mask, host_graph_visited, host_level,newJsonObj,h_visit_offsets,host_run_statistics);
+  }else{
+    run_bfs_cpu(numCols,graph.indptr,graph.inds, host_graph_mask, host_updating_graph_mask, host_graph_visited, host_level,newJsonObj,h_visit_offsets,host_run_statistics);
+  }
   // Select the element with the maximum value
   // Use GPU results because in large scales we won't have CPU results to validate
   // We could validate by running local and global models and cross check
