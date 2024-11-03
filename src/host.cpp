@@ -191,6 +191,12 @@ std::cout <<"----------------------------------------"<< std::endl;
     newJsonObj["startVertex"] = start_vertex;
     newJsonObj["numLevels"] = maxLevelCPU - 1;
     newJsonObj["avgMTEPS"] = (static_cast<unsigned int>(newJsonObj["edgesCount"])/(1000000*static_cast<double>(newJsonObj["avgExecutionTime"])*1e-3));
+    newJsonObj["avgMTEPS90f"] = (static_cast<unsigned int>(newJsonObj["edgesCount"])/(1000000*static_cast<double>(newJsonObj["avgExecutionTime90f"])*1e-3));
+    double gtepsValue = static_cast<unsigned int>(newJsonObj["edgesCount"]) / (1000000000 * static_cast<double>(newJsonObj["avgExecutionTime90f"]) * 1e-3);
+    std::ostringstream streamObj;
+    streamObj << std::fixed << std::setprecision(2) << gtepsValue;
+    newJsonObj["avgGTEPS90f"] = streamObj.str();
+
     newJsonObj["avgMTEPSFilter"] = (static_cast<unsigned int>(newJsonObj["edgesCount"])/(1000000*static_cast<double>(newJsonObj["avgExecutionTimeFiltered"])*1e-3));
     newJsonObj["maxMTEPSFilter"] = (static_cast<unsigned int>(newJsonObj["edgesCount"])/(1000000*static_cast<double>(newJsonObj["minExecutionTimeFiltered"])*1e-3));
     newJsonObj["edgesCoverage"] = static_cast<uint64_t>(newJsonObj["edgesCount"]) / numEdges * 100.0;
