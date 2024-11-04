@@ -143,9 +143,9 @@ std::cout <<"----------------------------------------"<< std::endl;
 #endif
 
   if(NUM_GPU > 1){
-    GPURun(numCols,graph.indsMulti,graph.indptrMulti,h_updating_graph_mask,h_graph_visited,h_distancesGPU,start_vertex,num_runs,newJsonObj,h_visit_offsets);  
+    GPURun(numRows,graph.indsMulti,graph.indptrMulti,h_updating_graph_mask,h_graph_visited,h_distancesGPU,start_vertex,num_runs,newJsonObj,h_visit_offsets);  
   }else{
-    GPURun(numCols,graph.inds,graph.indptr,h_updating_graph_mask,h_graph_visited,h_distancesGPU,start_vertex,num_runs,newJsonObj,h_visit_offsets); 
+    GPURun(numRows,graph.inds,graph.indptr,h_updating_graph_mask,h_graph_visited,h_distancesGPU,start_vertex,num_runs,newJsonObj,h_visit_offsets); 
   }
 
   
@@ -169,9 +169,9 @@ std::cout <<"----------------------------------------"<< std::endl;
   std::vector<DeviceInfo> host_run_statistics;
 
   if(NUM_GPU > 1){
-    run_bfs_cpu(numCols,graph.indptrMulti,graph.indsMulti, host_graph_mask, host_updating_graph_mask, host_graph_visited, host_level,newJsonObj,h_visit_offsets,host_run_statistics);
+    run_bfs_cpu(numRows,graph.indptrMulti,graph.indsMulti, host_graph_mask, host_updating_graph_mask, host_graph_visited, host_level,newJsonObj,h_visit_offsets,host_run_statistics);
   }else{
-    run_bfs_cpu(numCols,graph.indptr,graph.inds, host_graph_mask, host_updating_graph_mask, host_graph_visited, host_level,newJsonObj,h_visit_offsets,host_run_statistics);
+    run_bfs_cpu(numRows,graph.indptr,graph.inds, host_graph_mask, host_updating_graph_mask, host_graph_visited, host_level,newJsonObj,h_visit_offsets,host_run_statistics);
   }
   // Select the element with the maximum value
   // Use GPU results because in large scales we won't have CPU results to validate
