@@ -564,8 +564,9 @@ void GPURun(uint32_t vertexCount,
 
   }
   }
-    std::cout << "Number of SMs : " <<  Queues[0].get_device().get_info<info::device::max_compute_units>() << std::endl;
-    std::cout << "Max LOCAL_WORK_SIZE : " <<  Queues[0].get_device().get_info<info::device::max_work_group_size>() << std::endl;
+    std::cout << "SM_COUNT        : " <<  Queues[0].get_device().get_info<info::device::max_compute_units>() << std::endl;
+    std::cout << "SM_FACTOR       : "  << SM_FACTOR << std::endl;
+    std::cout << "LOCAL_WORK_SIZE : " <<  Queues[0].get_device().get_info<info::device::max_work_group_size>() << std::endl;
     
     std::cout <<"\n----------------------------------------"<< std::endl;
 
