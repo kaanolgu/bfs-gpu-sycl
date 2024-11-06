@@ -62,6 +62,7 @@ int main(int argc, char * argv[])
   parser.addArgument("num_runs", "1");
   parser.addArgument("dataset", "default");
   parser.addArgument("root", "1");
+  parser.addArgument("output", "data.json");
   // Parse the command line arguments
   parser.parseArguments(argc, argv);
 
@@ -69,7 +70,7 @@ int main(int argc, char * argv[])
   int num_runs = std::stoi(parser.getArgument("num_runs"));
   std::string datasetName = parser.getArgument("dataset").c_str();
   int start_vertex = stoi(parser.getArgument("root"));
-
+  std::string output_json_name = parser.getArgument("output").c_str();
 
   parser.printArguments();
       std::cout << std::setw(20) << std::left << "- num_gpu" << std::setw(20) << NUM_GPU << std::endl;
@@ -228,7 +229,7 @@ std::cout << std::endl;
     nlohmann::json combinedJsonObj;
 
     // Read existing data from the file, if it exists
-    std::ifstream inFile("data.json");
+    std::ifstream inFile(output_json_name);
     if (inFile.is_open()) {
         try {
             // Parse the existing JSON object from the file
