@@ -262,7 +262,7 @@ std::cout << std::endl;
     combinedJsonObj[datasetKey][std::to_string(NUM_GPU)] = newJsonObj;
 
     // Write the updated JSON object back to the file
-    std::ofstream outFile("data.json");
+    std::ofstream outFile(output_json_name);
     if (outFile.is_open()) {
         outFile << combinedJsonObj.dump(4); // Pretty-print with 4-space indentation
         outFile.close();
