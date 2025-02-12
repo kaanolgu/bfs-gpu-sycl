@@ -95,7 +95,7 @@ done
 ```
 
 # GENERATE DATASETS
-The dataset shared might be out of date and complain with an error. Best way is to generate your own RMAT dataset via scripts in the `scripts` folder or converting your already available dataset to binary format. The python might require missing packages that could be installed via ` pip install xxx` 
+The dataset `rmat-19-16` provided for up to 4 GPU files. Best way is to generate your own RMAT dataset via scripts in the `scripts` folder or converting your already available dataset to binary format. The python might require missing packages that could be installed via ` pip install xxx` 
 ```
 $python --version
 Python 3.12.5
