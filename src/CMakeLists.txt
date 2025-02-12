@@ -12,7 +12,7 @@ option(USE_STRIDED_LOCAL_LOAD_BALANCE "Enable the strided version of the executi
 set(SM_FACTOR 96 CACHE STRING "Define SM_FACTOR for the global load balance")
 
 # endif()
-if(ENABLE_NVIDIA)
+if(ENABLE_NVIDIA_BACKEND)
     message(STATUS "Configuring the design to run on NVIDIA_GPU device")
     set(CUDA_ARCH "80" CACHE STRING "Set the number of CUDA_ARCH to use (e.g. 80 for sm_80)")
     set(SYCL_TARGET "nvptx64-nvidia-cuda" CACHE STRING "Set the device")
