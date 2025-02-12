@@ -1,60 +1,96 @@
-# BUILD 
+# BUILD & RUN COMMANDS
 
+## AMD
+Tested with OneAPI Compiler 2025.0.0 with Codeplay plugin 
 ```
-module load fpga intel/oneapi-llvm/24.2.1 system/CUDA/12.6.0
-module load devel/CMake/3.27.6-GCCcore-13.2.0 tools/binutils/2.40-GCCcore-13.2.0
+module load rocm/5.4.3
+source ~/spack/opt/spack/linux-rhel8-zen3/gcc-13.3.0/intel-oneapi-compilers-2025.0.0-gwzwv5l7t3jqv4aywexkknga4seygwbh/setvars.sh --force --include-intel-llvm
 
-# NVIDIA GPU
-# Generate ALL 8 GPUS for DGX
-rm -rf build;mkdir build;cd build;cmake .. -DENABLE_NVIDIA=ON -DCUDA_ARCH=80 -DGPU_TARGETS=all -DENABLE_VERBOSE=ON
-# If you prefer you could generate 1 to 4 instead of 1 to 8 
-rm -rf build;mkdir build;cd build;cmake .. -DENABLE_NVIDIA=ON -DCUDA_ARCH=80 -DGPU_TARGETS="1;2;3;4" -DENABLE_VERBOSE=ON
-make
-```
-or rely on the provided spack environment :
-```
-cd path/to/project
-source ../spack/share/spack/setup-env.sh 
-spack env activate -p environment
+# ENABLE_AMD_BACKEND = [ON/OFF] 
+# AMD_GPU_TARGET = [gfx90a for MI210 ]
+# GPU TARGETS = [ALL/"1;2;3"] generating multiGPU versions for how many GPUs
+# ENABLE_VERBOSE = [ON/OFF] for debugging purposes
+# SM_FACTOR = empirical value explained in paper
 
-rm -rf build
-cmake -Bbuild -H.  -DENABLE_NVIDIA=ON -DCUDA_ARCH=80 -DGPU_TARGETS=all -DENABLE_VERBOSE=OFF
-cmake --build build
-```
+# LLB
+cmake -Bbuild_local -H.  -DENABLE_AMD_BACKEND=ON -DAMD_GPU_TARGET=80 -DGPU_TARGETS=all -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=OFF -DUSE_STRIDED_LOCAL_LOAD_BALANCE=OFF -DSM_FACTOR=48
+cmake --build build_local
 
-# RUN 
-```
-module load fpga intel/oneapi-llvm/24.2.1 system/CUDA/12.6.0
-module load devel/CMake/3.27.6-GCCcore-13.2.0
+# GLB
+cmake -Bbuild_global -H.  -DENABLE_AMD_BACKEND=ON -DAMD_GPU_TARGET=80 -DGPU_TARGETS=all -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=ON -DUSE_STRIDED_LOCAL_LOAD_BALANCE=OFF -DSM_FACTOR=48
+cmake --build build_global
 
-export SYCL_PI_TRACE=1
-export SYCL_PRINT_EXECUTION_GRAPH="always"
+# SLB
+cmake -Bbuild_stride_local -H.  -DENABLE_AMD_BACKEND=ON -DAMD_GPU_TARGET=80 -DGPU_TARGETS=all -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=OFF -DUSE_STRIDED_LOCAL_LOAD_BALANCE=ON -DSM_FACTOR=48
+cmake --build build_stride_local
 
-echo "RMAT-21-64 Test all GPU combinations"
+# RUN
 for j in {1..8}; do
-  ./build/bfs_${j}.gpu --dataset=rmat-21-64 --root=0 --num_runs=100
-done
-echo "LJ Test ALL GPU Combinations"
-for j in {1..8}; do
-    ./build/bfs_${j}.gpu --dataset=lj --root=10009 --num_runs=100
+./build_local/bfs_${j}.gpu --dataset=$dataset --root=$root --num_runs=20 --output=output_nvidia.json
+./build_global/bfs_${j}.gpu --dataset=$dataset --root=$root --num_runs=20 --output=output_nvidia.json
+./build_stride_local/bfs_${j}.gpu --dataset=$dataset --root=$root --num_runs=20 --output=output_nvidia.json
 done
 ```
-
-or rely on the alternative spack loaded packages
+## NVIDIA
+[Here](https://developer.codeplay.com/products/oneapi/nvidia/2025.0.0/guides/get-started-guide-nvidia) is the link for more options.
 ```
-cd path/to/project
-source ../spack/share/spack/setup-env.sh 
-spack env activate -p environment
+module load CUDA/12.6.0
+module load CMake/3.27.6-GCCcore-13.2.0 binutils/2.40-GCCcore-13.2.0
+source ~/spack/opt/spack/linux-rhel8-zen3/gcc-13.3.0/intel-oneapi-compilers-2025.0.0-gwzwv5l7t3jqv4aywexkknga4seygwbh/setvars.sh --force --include-intel-llvm
 
-export SYCL_PI_TRACE=1
-export SYCL_PRINT_EXECUTION_GRAPH="always"
+# ENABLE_NVIDIA_BACKEND = [ON/OFF] 
+# CUDA_ARCH = [80 for A100, 90a for H100 .. ]
+# GPU TARGETS = [ALL/"1;2;3"] generating multiGPU versions for how many GPUs
+# ENABLE_VERBOSE = [ON/OFF] for debugging purposes
+# SM_FACTOR = empirical value explained in paper
 
-echo "RMAT-21-64 Test all GPU combinations"
+# LLB
+cmake -Bbuild_local -H.  -DENABLE_NVIDIA_BACKEND=ON -DCUDA_ARCH=80 -DGPU_TARGETS=all -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=OFF -DUSE_STRIDED_LOCAL_LOAD_BALANCE=OFF -DSM_FACTOR=48
+cmake --build build_local
+
+# GLB
+cmake -Bbuild_global -H.  -DENABLE_NVIDIA_BACKEND=ON -DCUDA_ARCH=80 -DGPU_TARGETS=all -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=ON -DUSE_STRIDED_LOCAL_LOAD_BALANCE=OFF -DSM_FACTOR=48
+cmake --build build_global
+
+# SLB
+cmake -Bbuild_stride_local -H.  -DENABLE_NVIDIA_BACKEND=ON -DCUDA_ARCH=80 -DGPU_TARGETS=all -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=OFF -DUSE_STRIDED_LOCAL_LOAD_BALANCE=ON -DSM_FACTOR=48
+cmake --build build_stride_local
+
+# RUN
 for j in {1..8}; do
-  ./build/bfs_${j}.gpu --dataset=rmat-21-64 --root=0 --num_runs=100
-done
-echo "LJ Test ALL GPU Combinations"
-for j in {1..8}; do
-    ./build/bfs_${j}.gpu --dataset=lj --root=10009 --num_runs=100
+./build_local/bfs_${j}.gpu --dataset=$dataset --root=$root --num_runs=20 --output=output_nvidia.json
+./build_global/bfs_${j}.gpu --dataset=$dataset --root=$root --num_runs=20 --output=output_nvidia.json
+./build_stride_local/bfs_${j}.gpu --dataset=$dataset --root=$root --num_runs=20 --output=output_nvidia.json
 done
 ```
+
+## INTEL
+```
+module load CMake/3.27.6-GCCcore-13.2.0 binutils/2.40-GCCcore-13.2.0
+source ~/spack/opt/spack/linux-rhel8-zen3/gcc-13.3.0/intel-oneapi-compilers-2025.0.0-gwzwv5l7t3jqv4aywexkknga4seygwbh/setvars.sh --force --include-intel-llvm
+export ONEAPI_DEVICE_SELECTOR=level_zero:gpu
+
+# GPU TARGETS = [ALL/"1;2;3"] generating multiGPU versions for how many GPUs
+# ENABLE_VERBOSE = [ON/OFF] for debugging purposes
+# SM_FACTOR = empirical value explained in paper
+
+# LLB
+cmake -Bbuild_local -H.  -DGPU_TARGETS=all -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=OFF -DUSE_STRIDED_LOCAL_LOAD_BALANCE=OFF -DSM_FACTOR=48
+cmake --build build_local
+
+# GLB
+cmake -Bbuild_global -H.   -DGPU_TARGETS=all -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=ON -DUSE_STRIDED_LOCAL_LOAD_BALANCE=OFF -DSM_FACTOR=48
+cmake --build build_global
+
+# SLB
+cmake -Bbuild_stride_local -H.  -DGPU_TARGETS=all -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=OFF -DUSE_STRIDED_LOCAL_LOAD_BALANCE=ON -DSM_FACTOR=48
+cmake --build build_stride_local
+
+# RUN
+for j in {1..8}; do
+./build_local/bfs_${j}.gpu --dataset=$dataset --root=$root --num_runs=20 --output=output_intel.json
+./build_global/bfs_${j}.gpu --dataset=$dataset --root=$root --num_runs=20 --output=output_intel.json
+./build_stride_local/bfs_${j}.gpu --dataset=$dataset --root=$root --num_runs=20 --output=output_intel.json
+done
+```
+
