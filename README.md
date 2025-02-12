@@ -94,3 +94,15 @@ for j in {1..8}; do
 done
 ```
 
+# GENERATE DATASETS
+The dataset shared might be out of date and complain with an error. Best way is to generate your own RMAT dataset via scripts in the `scripts` folder or converting your already available dataset to binary format. The python might require missing packages that could be installed via ` pip install xxx` 
+```
+$python --version
+Python 3.12.5
+
+
+python genGraph.py rmat ${scale} ${factor}
+python generator.py rmat-${scale}-${factor} nnz
+
+# Example : 
+python generator.py rmat-19-16 nnz $((2**19))
