@@ -10,7 +10,7 @@ using namespace sycl;
 #include <chrono>  // timer
 #include "functions.hpp"
 #include "unrolled_loop.hpp"
-#define MAX_NUM_LEVELS 100
+#define MAX_NUM_LEVELS 1000
 /* Introduces overheads not performant*/
 // #include <omp.h>
 
