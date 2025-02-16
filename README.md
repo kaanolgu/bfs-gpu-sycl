@@ -1,5 +1,5 @@
 # BUILD & RUN COMMANDS
-
+- For the Intel OneAPI Compiler Spack Package with `+amd` and `+nvidia` plugin options enabled
 ## AMD
 Tested with OneAPI Compiler 2025.0.0 with Codeplay plugin 
 ```
