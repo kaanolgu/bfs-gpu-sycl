@@ -1,4 +1,21 @@
-# BUILD & RUN COMMANDS
+# Towards Efficient Load Balancing on GPUs: One Source Code for All Major Vendor GPUs with SYCL
+This work has been submitted to 31st International European Conference on Parallel and Distributed Computing (EURO-PAR 2025)
+This work is tested on AMD MI210, Intel Max 1550, Nvidia A100, and Nvidia GH200 GPUS.
+
+- We have 3 different load balancing approaches that works best in different scenarios:
+
+  - __Local Load Balancing(LLB)__ 
+distributes work efficiently within each work-group, ensuring that individual work-items share the load evenly.
+
+  - __Global Load Balancing(GLB)__
+extends load balancing across the entire device by redistributing work between work-groups.
+
+  - __Strided Local Load Balancing(SLB)__ similar to LLB but assigns work-items using a strided mapping based on the number of work-groups.
+
+
+Authors: [Kaan Olgu](https://research-information.bris.ac.uk/en/persons/kaan-olgu-2) & [Tobias Kenter](https://www.uni-paderborn.de/en/person/3145)
+
+# Build & Run Commands
 - For the Intel OneAPI Compiler Spack Package with `+amd` and `+nvidia` plugin options enabled
 ## AMD
 Tested with OneAPI Compiler 2025.0.0 with Codeplay plugin 
@@ -94,7 +111,7 @@ for j in {1..8}; do
 done
 ```
 
-# GENERATE DATASETS
+# Generate Datasets
 The dataset `rmat-19-16` provided for up to 4 GPU files. Best way is to generate your own RMAT dataset via scripts in the `scripts` folder or converting your already available dataset to binary format. The python might require missing packages that could be installed via ` pip install xxx` 
 ```
 $python --version
@@ -106,3 +123,7 @@ python generator.py rmat-${scale}-${factor} nnz
 
 # Example : 
 python generator.py rmat-19-16 nnz $((2**19))
+```
+# Cite
+
+
