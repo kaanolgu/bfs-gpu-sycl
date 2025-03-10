@@ -15,9 +15,9 @@ extends load balancing across the entire device by redistributing work between w
 
 Authors: [Kaan Olgu](https://research-information.bris.ac.uk/en/persons/kaan-olgu-2) & [Tobias Kenter](https://www.uni-paderborn.de/en/person/3145)
 
-# Build & Run Commands
+## Build & Run Commands
 - For the Intel OneAPI Compiler Spack Package with `+amd` and `+nvidia` plugin options enabled
-## AMD
+### AMD
 Tested with OneAPI Compiler 2025.0.0 with Codeplay plugin 
 ```
 module load rocm/5.4.3
@@ -48,7 +48,7 @@ for j in {1..8}; do
 ./build_stride_local/bfs_${j}.gpu --dataset=$dataset --root=$root --num_runs=20 --output=output_nvidia.json
 done
 ```
-## NVIDIA
+### NVIDIA
 [Here](https://developer.codeplay.com/products/oneapi/nvidia/2025.0.0/guides/get-started-guide-nvidia) is the link for more options.
 ```
 module load CUDA/12.6.0
@@ -81,7 +81,7 @@ for j in {1..8}; do
 done
 ```
 
-## INTEL
+### INTEL
 ```
 module load CMake/3.27.6-GCCcore-13.2.0 binutils/2.40-GCCcore-13.2.0
 source ~/spack/opt/spack/linux-rhel8-zen3/gcc-13.3.0/intel-oneapi-compilers-2025.0.0-gwzwv5l7t3jqv4aywexkknga4seygwbh/setvars.sh --force --include-intel-llvm
@@ -111,7 +111,7 @@ for j in {1..8}; do
 done
 ```
 
-# Generate Datasets
+## Generate Datasets
 The dataset `rmat-19-16` provided for up to 4 GPU files. Best way is to generate your own RMAT dataset via scripts in the `scripts` folder or converting your already available dataset to binary format. The python might require missing packages that could be installed via ` pip install xxx` 
 ```
 $python --version
@@ -124,6 +124,9 @@ python generator.py rmat-${scale}-${factor} nnz
 # Example : 
 python generator.py rmat-19-16 nnz $((2**19))
 ```
-# Cite
+## Cite
 
+## Acknowledgments
+> The authors gratefully acknowledge the computing time provided to them on the high-performance computers Noctua2 at the NHR Center PC2. These are funded by the Federal Ministry of Education and Research and the state governments participating on the basis of the resolutions of the GWK for the national highperformance computing at universities (www.nhr-verein.de/unsere-partner).
 
+> (Intel Tiber AI Cloud)[https://www.intel.com/content/www/us/en/developer/tools/tiber/ai-cloud.html]
