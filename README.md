@@ -124,6 +124,14 @@ python generator.py rmat-${scale}-${factor} nnz
 # Example : 
 python generator.py rmat-19-16 nnz $((2**19))
 ```
+
+
+## Performance Results
+Here is a table that we captured the throughput values in **GTEPS**
+<img width="810" alt="image" src="https://github.com/user-attachments/assets/9c7bf23f-691e-431e-a6c5-34aa45a53592" />
+
+
+
 ## Cite
 
 ## Acknowledgments
