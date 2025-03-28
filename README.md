@@ -1,6 +1,6 @@
 # Towards Efficient Load Balancing on GPUs: One Source Code for All Major Vendor GPUs with SYCL
 This work has been submitted to 31st International European Conference on Parallel and Distributed Computing (EURO-PAR 2025)
-This work is tested on AMD MI210, Intel Max 1550, Nvidia A100, and Nvidia GH200 GPUS.
+This work is tested on AMD MI210,AMD MI300X, Intel Max 1550, Nvidia A100, and Nvidia GH200 GPUS.
 
 - We have 3 different load balancing approaches that works best in different scenarios:
 
@@ -30,15 +30,15 @@ source ~/spack/opt/spack/linux-rhel8-zen3/gcc-13.3.0/intel-oneapi-compilers-2025
 # SM_FACTOR = empirical value explained in paper
 
 # LLB
-cmake -Bbuild_local -H.  -DENABLE_AMD_BACKEND=ON -DAMD_GPU_TARGET=80 -DGPU_TARGETS=all -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=OFF -DUSE_STRIDED_LOCAL_LOAD_BALANCE=OFF -DSM_FACTOR=48
+cmake -Bbuild_local -H.  -DENABLE_AMD_BACKEND=ON -DAMD_GPU_TARGET=gfx90a -DGPU_TARGETS=all -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=OFF -DUSE_STRIDED_LOCAL_LOAD_BALANCE=OFF -DSM_FACTOR=48
 cmake --build build_local
 
 # GLB
-cmake -Bbuild_global -H.  -DENABLE_AMD_BACKEND=ON -DAMD_GPU_TARGET=80 -DGPU_TARGETS=all -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=ON -DUSE_STRIDED_LOCAL_LOAD_BALANCE=OFF -DSM_FACTOR=48
+cmake -Bbuild_global -H.  -DENABLE_AMD_BACKEND=ON -DAMD_GPU_TARGET=gfx90a -DGPU_TARGETS=all -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=ON -DUSE_STRIDED_LOCAL_LOAD_BALANCE=OFF -DSM_FACTOR=48
 cmake --build build_global
 
 # SLB
-cmake -Bbuild_stride_local -H.  -DENABLE_AMD_BACKEND=ON -DAMD_GPU_TARGET=80 -DGPU_TARGETS=all -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=OFF -DUSE_STRIDED_LOCAL_LOAD_BALANCE=ON -DSM_FACTOR=48
+cmake -Bbuild_stride_local -H.  -DENABLE_AMD_BACKEND=ON -DAMD_GPU_TARGET=gfx90a -DGPU_TARGETS=all -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=OFF -DUSE_STRIDED_LOCAL_LOAD_BALANCE=ON -DSM_FACTOR=48
 cmake --build build_stride_local
 
 # RUN
