@@ -1,5 +1,5 @@
 # Towards Efficient Load Balancing on GPUs: One Source Code for All Major Vendor GPUs with SYCL
-This work has been submitted to 31st International European Conference on Parallel and Distributed Computing (EURO-PAR 2025)
+This work has been submitted to IEEE Cluster 2025 which is the the 27th edition of the IEEE Cluster 
 This work is tested on AMD MI210,AMD MI300X, Intel Max 1550, Nvidia A100, and Nvidia GH200 GPUS.
 
 - We have 3 different load balancing approaches that works best in different scenarios:
@@ -13,7 +13,7 @@ extends load balancing across the entire device by redistributing work between w
   - __Strided Local Load Balancing(SLB)__ similar to LLB but assigns work-items using a strided mapping based on the number of work-groups.
 
 
-Authors: [Kaan Olgu](https://research-information.bris.ac.uk/en/persons/kaan-olgu-2) & [Tobias Kenter](https://www.uni-paderborn.de/en/person/3145)
+Contributors: [Kaan Olgu](https://research-information.bris.ac.uk/en/persons/kaan-olgu-2) & [Tobias Kenter](https://www.uni-paderborn.de/en/person/3145)
 
 ## Build & Run Commands
 - For the Intel OneAPI Compiler Spack Package with `+amd` and `+nvidia` plugin options enabled
