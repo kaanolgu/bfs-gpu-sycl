@@ -1,5 +1,5 @@
 # Towards Efficient Load Balancing on GPUs: One Source Code for All Major Vendor GPUs with SYCL
-This work has been submitted to IEEE Cluster 2025 which is the the 27th edition of the IEEE Cluster.
+This work has been submitted to WACCPD 2025 which is the the Twelfth Workshop on Accelerator Programming and Directives.
 
 This work is tested on AMD MI210,AMD MI300X, Intel Max 1550, Nvidia A100, and Nvidia GH200 GPUS.
 
