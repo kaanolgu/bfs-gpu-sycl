@@ -1,18 +1,18 @@
 workflow:
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
-
+ 
 stages:
   - build
   - test
-
+ 
 variables:
   CUDA_ARCH: "75"
   SM_FACTOR: "40"
   GPU_TARGETS: "1"
   DATASET_SCALE: "16"
   DATASET_FACTOR: "8"
-
+ 
 build:
   stage: build
   tags:
@@ -42,7 +42,7 @@ build:
       - build_global/
       - build_stride_local/
     expire_in: 1 hour
-
+ 
 test:
   stage: test
   tags:
