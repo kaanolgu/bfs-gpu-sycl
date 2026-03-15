@@ -3,8 +3,6 @@ name: GPU Tests (GitLab)
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
 
 jobs:
   trigger-gitlab:
@@ -16,30 +14,27 @@ jobs:
 
       - name: Push branch to GitLab and trigger pipeline
         run: |
-          REF="${{ github.head_ref || github.ref_name }}"
-          
-          # Push current code to GitLab
+          REF="${{ github.head_ref }}"
+
           git remote add gitlab https://oauth2:${{ secrets.GITLAB_API_TOKEN }}@gitlab.com/kaanolgu1/bfs-gpu-sycl.git
           git push gitlab HEAD:refs/heads/${REF} --force
-          
-          # Trigger pipeline
+
           RESPONSE=$(curl -s -X POST \
             "https://gitlab.com/api/v4/projects/${{ secrets.GITLAB_PROJECT_ID }}/trigger/pipeline" \
             -F "token=${{ secrets.GITLAB_TRIGGER_TOKEN }}" \
             -F "ref=${REF}")
-          
+
           PIPELINE_ID=$(echo "$RESPONSE" | jq -r '.id')
           PIPELINE_URL=$(echo "$RESPONSE" | jq -r '.web_url')
-          
+
           if [[ "$PIPELINE_ID" == "null" ]]; then
             echo "Failed to create pipeline:"
             echo "$RESPONSE"
             exit 1
           fi
-          
+
           echo "Pipeline: $PIPELINE_URL"
-          
-          # Poll until complete (timeout after 20 minutes)
+
           TIMEOUT=1200
           ELAPSED=0
           while [ $ELAPSED -lt $TIMEOUT ]; do
@@ -53,7 +48,7 @@ jobs:
               echo "Pipeline failed: $PIPELINE_URL"
               exit 1
             fi
-            sleep 50
+            sleep 30
             ELAPSED=$((ELAPSED + 30))
           done
           echo "Timeout waiting for pipeline"
