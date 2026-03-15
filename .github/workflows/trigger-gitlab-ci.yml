@@ -1,0 +1,34 @@
+name: GPU Tests (GitLab)
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  trigger-gitlab:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger GitLab Pipeline
+        run: |
+          RESPONSE=$(curl -s -X POST \
+            "https://gitlab.com/api/v4/projects/${{ secrets.GITLAB_PROJECT_ID }}/trigger/pipeline" \
+            -F "token=${{ secrets.GITLAB_TRIGGER_TOKEN }}" \
+            -F "ref=${{ github.head_ref || github.ref_name }}")
+          
+          PIPELINE_ID=$(echo "$RESPONSE" | jq -r '.id')
+          PIPELINE_URL=$(echo "$RESPONSE" | jq -r '.web_url')
+          echo "Pipeline: $PIPELINE_URL"
+          
+          # Poll until complete
+          while true; do
+            STATUS=$(curl -s \
+              "https://gitlab.com/api/v4/projects/${{ secrets.GITLAB_PROJECT_ID }}/pipelines/$PIPELINE_ID" \
+              -H "PRIVATE-TOKEN: ${{ secrets.GITLAB_API_TOKEN }}" \
+              | jq -r '.status')
+            echo "Status: $STATUS"
+            if [[ "$STATUS" == "success" ]]; then exit 0; fi
+            if [[ "$STATUS" == "failed" || "$STATUS" == "canceled" ]]; then exit 1; fi
+            sleep 30
+          done
