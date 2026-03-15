@@ -114,27 +114,6 @@ struct has_subscript {
 template <typename T>
 inline constexpr bool has_subscript_v = has_subscript<T>::value;
 
-//
-// checks if a type is any instance of SYCL pipe
-//
-namespace detail {
-
-template<typename T>
-struct is_sycl_pipe_impl : std::false_type {};
-
-template<typename Id, typename T, std::size_t N>
-struct is_sycl_pipe_impl<sycl::ext::intel::pipe<Id, T, N>> : std::true_type {};
-
-}  // namespace detail
-
-template <typename T>
-struct is_sycl_pipe {
-  static constexpr bool value = detail::is_sycl_pipe_impl<T>{};
-};
-
-template <typename T>
-inline constexpr bool is_sycl_pipe_v = is_sycl_pipe<T>::value;
-
 } // namespace gpu_tools
 
 #endif  /* __METAPROGRAMMING_UTILS_HPP__ */
