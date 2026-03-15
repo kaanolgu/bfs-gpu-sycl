@@ -1,0 +1,157 @@
+stages:
+  - build
+  - test
+ 
+variables:
+  # T4 is sm_75
+  CUDA_ARCH: "75"
+  SM_FACTOR: "40"
+  # Only build single-GPU version for CI verification
+  GPU_TARGETS: "1"
+  # Dataset for quick CI test
+  DATASET_SCALE: "16"
+  DATASET_FACTOR: "8"
+ 
+# ---------------------------------------------------------------------------
+# Stage 1: Build all three load-balancing variants (LLB, GLB, SLB)
+# ---------------------------------------------------------------------------
+build:
+  stage: build
+  tags:
+    - saas-linux-medium-amd64-gpu-standard
+  image: nvcr.io/nvidia/cuda:12.6.0-devel-ubuntu22.04
+  before_script:
+    # Verify GPU is available
+    - nvidia-smi
+    # Install essentials
+    - apt-get update -qq
+    - apt-get install -y -qq wget cmake make git python3 python3-pip gpg-agent > /dev/null 2>&1
+    # Install Intel oneAPI DPC++ compiler
+    - |
+      wget -qO- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB \
+        | gpg --dearmor -o /usr/share/keyrings/oneapi-archive-keyring.gpg
+      echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] \
+        https://apt.repos.intel.com/oneapi all main" \
+        > /etc/apt/sources.list.d/oneAPI.list
+      apt-get update -qq
+      apt-get install -y -qq intel-oneapi-compiler-dpcpp-cpp-2025.0 > /dev/null 2>&1
+    # Install Codeplay NVIDIA plugin for oneAPI
+    - |
+      wget -q "https://developer.codeplay.com/api/v2/products/oneapi/nvidia/2025.0.0/4/linux/installer" \
+        -O nvidia-plugin.sh
+      bash nvidia-plugin.sh -y --install-dir /opt/intel/oneapi 2>/dev/null || true
+    # Activate oneAPI environment
+    - source /opt/intel/oneapi/setvars.sh --force --include-intel-llvm
+  script:
+    # --- Build LLB (Local Load Balancing) ---
+    - >
+      cmake -Bbuild_local -H.
+      -DENABLE_NVIDIA_BACKEND=ON
+      -DCUDA_ARCH=${CUDA_ARCH}
+      -DGPU_TARGETS=${GPU_TARGETS}
+      -DENABLE_VERBOSE=OFF
+      -DUSE_GLOBAL_LOAD_BALANCE=OFF
+      -DUSE_STRIDED_LOCAL_LOAD_BALANCE=OFF
+      -DSM_FACTOR=${SM_FACTOR}
+    - cmake --build build_local
+ 
+    # --- Build GLB (Global Load Balancing) ---
+    - >
+      cmake -Bbuild_global -H.
+      -DENABLE_NVIDIA_BACKEND=ON
+      -DCUDA_ARCH=${CUDA_ARCH}
+      -DGPU_TARGETS=${GPU_TARGETS}
+      -DENABLE_VERBOSE=OFF
+      -DUSE_GLOBAL_LOAD_BALANCE=ON
+      -DUSE_STRIDED_LOCAL_LOAD_BALANCE=OFF
+      -DSM_FACTOR=${SM_FACTOR}
+    - cmake --build build_global
+ 
+    # --- Build SLB (Strided Local Load Balancing) ---
+    - >
+      cmake -Bbuild_stride_local -H.
+      -DENABLE_NVIDIA_BACKEND=ON
+      -DCUDA_ARCH=${CUDA_ARCH}
+      -DGPU_TARGETS=${GPU_TARGETS}
+      -DENABLE_VERBOSE=OFF
+      -DUSE_GLOBAL_LOAD_BALANCE=OFF
+      -DUSE_STRIDED_LOCAL_LOAD_BALANCE=ON
+      -DSM_FACTOR=${SM_FACTOR}
+    - cmake --build build_stride_local
+  artifacts:
+    paths:
+      - build_local/
+      - build_global/
+      - build_stride_local/
+    expire_in: 1 hour
+ 
+# ---------------------------------------------------------------------------
+# Stage 2: Generate a small dataset and run the BFS on the GPU
+# ---------------------------------------------------------------------------
+test:
+  stage: test
+  tags:
+    - saas-linux-medium-amd64-gpu-standard
+  image: nvcr.io/nvidia/cuda:12.6.0-devel-ubuntu22.04
+  needs: ["build"]
+  before_script:
+    - nvidia-smi
+    - apt-get update -qq
+    - apt-get install -y -qq python3 python3-pip > /dev/null 2>&1
+    - pip3 install --break-system-packages numpy scipy networkx > /dev/null 2>&1
+    # Activate oneAPI runtime (needed for SYCL runtime libs)
+    - |
+      apt-get install -y -qq wget gpg-agent > /dev/null 2>&1
+      wget -qO- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB \
+        | gpg --dearmor -o /usr/share/keyrings/oneapi-archive-keyring.gpg
+      echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] \
+        https://apt.repos.intel.com/oneapi all main" \
+        > /etc/apt/sources.list.d/oneAPI.list
+      apt-get update -qq
+      apt-get install -y -qq intel-oneapi-runtime-dpcpp-cpp-2025.0 > /dev/null 2>&1
+      wget -q "https://developer.codeplay.com/api/v2/products/oneapi/nvidia/2025.0.0/4/linux/installer" \
+        -O nvidia-plugin.sh
+      bash nvidia-plugin.sh -y --install-dir /opt/intel/oneapi 2>/dev/null || true
+    - source /opt/intel/oneapi/setvars.sh --force --include-intel-llvm
+  script:
+    # Generate a small RMAT dataset for CI testing
+    - cd scripts
+    - python3 genGraph.py rmat ${DATASET_SCALE} ${DATASET_FACTOR} || echo "Using bundled dataset"
+    - python3 generator.py rmat-${DATASET_SCALE}-${DATASET_FACTOR} nnz $((2**${DATASET_SCALE})) || echo "Using bundled dataset"
+    - cd ..
+ 
+    # Determine which dataset to use
+    - |
+      if [ -d "dataset/rmat-${DATASET_SCALE}-${DATASET_FACTOR}" ]; then
+        DATASET="dataset/rmat-${DATASET_SCALE}-${DATASET_FACTOR}"
+      else
+        # Fall back to the bundled rmat-19-16 dataset
+        DATASET="dataset/rmat-19-16"
+      fi
+      echo "Using dataset: ${DATASET}"
+ 
+    # Run single-GPU BFS for each load-balancing variant
+    - echo "===== Testing LLB (Local Load Balancing) ====="
+    - ./build_local/bfs_1.gpu --dataset=${DATASET} --root=0 --num_runs=3 --output=output_ci.json
+ 
+    - echo "===== Testing GLB (Global Load Balancing) ====="
+    - ./build_global/bfs_1.gpu --dataset=${DATASET} --root=0 --num_runs=3 --output=output_ci.json
+ 
+    - echo "===== Testing SLB (Strided Local Load Balancing) ====="
+    - ./build_stride_local/bfs_1.gpu --dataset=${DATASET} --root=0 --num_runs=3 --output=output_ci.json
+ 
+    - echo "All GPU tests passed!"
+  artifacts:
+    paths:
+      - output_ci.json
+    expire_in: 7 days
+    when: always
+ 
+
+
+
+ workflow:
+   rules:
+     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+     - if: $CI_COMMIT_BRANCH == "main"
+ 
