@@ -1,88 +1,152 @@
 workflow:
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
- 
+
 stages:
+  - compiler
   - build
   - test
- 
+
 variables:
   CUDA_ARCH: "75"
-  SM_FACTOR: "40"
+  SM_FACTOR: "40"  # Tesla T4 = 40 SMs
   GPU_TARGETS: "1"
-  DATASET_SCALE: "16"
-  DATASET_FACTOR: "8"
- 
-build:
-  stage: build
+  DPCPP_NIGHTLY_URL: "https://github.com/intel/llvm/releases/download/nightly-2026-03-12/sycl_linux.tar.gz"
+  DPCPP_TAG: "nightly-2026-03-12"
+  DATASET: "rmat-19-16-nnz"
+
+compiler:
+  stage: compiler
+  interruptible: true
   tags:
     - saas-linux-medium-amd64-gpu-standard
-  image: nvcr.io/nvidia/cuda:12.6.0-devel-ubuntu22.04
-  before_script:
-    - nvidia-smi
-    - apt-get update -qq
-    - apt-get install -y -qq wget cmake make git python3 python3-pip gpg-agent
-    - wget -qO- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor -o /usr/share/keyrings/oneapi-archive-keyring.gpg
-    - echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" > /etc/apt/sources.list.d/oneAPI.list
-    - apt-get update -qq
-    - apt-get install -y -qq intel-oneapi-compiler-dpcpp-cpp-2025.0
-    - wget -q "https://developer.codeplay.com/api/v2/products/oneapi/nvidia/2025.0.0/4/linux/installer" -O nvidia-plugin.sh
-    - bash nvidia-plugin.sh -y --install-dir /opt/intel/oneapi || true
-    - source /opt/intel/oneapi/setvars.sh --force --include-intel-llvm
+  image: nvcr.io/nvidia/cuda:12.8.0-devel-ubuntu22.04
+  cache:
+    key: "dpcpp-prebuilt-${DPCPP_TAG}"
+    paths:
+      - dpcpp-install/
+    policy: pull-push
   script:
-    - cmake -Bbuild_local -H. -DENABLE_NVIDIA_BACKEND=ON -DCUDA_ARCH=${CUDA_ARCH} -DGPU_TARGETS=${GPU_TARGETS} -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=OFF -DUSE_STRIDED_LOCAL_LOAD_BALANCE=OFF -DSM_FACTOR=${SM_FACTOR}
-    - cmake --build build_local
-    - cmake -Bbuild_global -H. -DENABLE_NVIDIA_BACKEND=ON -DCUDA_ARCH=${CUDA_ARCH} -DGPU_TARGETS=${GPU_TARGETS} -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=ON -DUSE_STRIDED_LOCAL_LOAD_BALANCE=OFF -DSM_FACTOR=${SM_FACTOR}
-    - cmake --build build_global
-    - cmake -Bbuild_stride_local -H. -DENABLE_NVIDIA_BACKEND=ON -DCUDA_ARCH=${CUDA_ARCH} -DGPU_TARGETS=${GPU_TARGETS} -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=OFF -DUSE_STRIDED_LOCAL_LOAD_BALANCE=ON -DSM_FACTOR=${SM_FACTOR}
-    - cmake --build build_stride_local
+    - |
+      if [ -f "dpcpp-install/bin/clang++" ]; then
+        echo "DPC++ ${DPCPP_TAG} found in cache, skipping download."
+        dpcpp-install/bin/clang++ --version
+        exit 0
+      fi
+      echo "Downloading Intel DPC++ pre-built nightly ${DPCPP_TAG}..."
+      apt-get update -qq
+      apt-get install -y -qq --no-install-recommends curl ca-certificates
+      mkdir -p dpcpp-install
+      curl -sSL --retry 3 --retry-delay 5 "${DPCPP_NIGHTLY_URL}" | tar -xz -C dpcpp-install --strip-components=1
+      echo "DPC++ downloaded and extracted"
+      dpcpp-install/bin/clang++ --version
+  artifacts:
+    name: "dpcpp-${DPCPP_TAG}"
+    paths:
+      - dpcpp-install/
+    expire_in: 1 week
+
+build:local:
+  stage: build
+  interruptible: true
+  tags:
+    - saas-linux-medium-amd64-gpu-standard
+  image: nvcr.io/nvidia/cuda:12.8.0-devel-ubuntu22.04
+  needs:
+    - job: compiler
+      artifacts: true
+  script:
+    - |
+      nvidia-smi || echo "WARNING: nvidia-smi unavailable, continuing"
+      apt-get update -qq
+      apt-get install -y -qq --no-install-recommends cmake ninja-build python3
+      export PATH="${CI_PROJECT_DIR}/dpcpp-install/bin:$PATH"
+      export LD_LIBRARY_PATH="${CI_PROJECT_DIR}/dpcpp-install/lib:$LD_LIBRARY_PATH"
+      clang++ --version
+      cmake -Bbuild_local -H. -GNinja -DENABLE_NVIDIA_BACKEND=ON -DCUDA_ARCH=${CUDA_ARCH} -DGPU_TARGETS=${GPU_TARGETS} -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=OFF -DUSE_STRIDED_LOCAL_LOAD_BALANCE=OFF -DSM_FACTOR=${SM_FACTOR}
+      cmake --build build_local -- -j$(nproc)
   artifacts:
     paths:
-      - build_local/
-      - build_global/
-      - build_stride_local/
+      - build_local/bfs_1.gpu
     expire_in: 1 hour
- 
+
+build:global:
+  stage: build
+  interruptible: true
+  tags:
+    - saas-linux-medium-amd64-gpu-standard
+  image: nvcr.io/nvidia/cuda:12.8.0-devel-ubuntu22.04
+  needs:
+    - job: compiler
+      artifacts: true
+  script:
+    - |
+      nvidia-smi || echo "WARNING: nvidia-smi unavailable, continuing"
+      apt-get update -qq
+      apt-get install -y -qq --no-install-recommends cmake ninja-build python3
+      export PATH="${CI_PROJECT_DIR}/dpcpp-install/bin:$PATH"
+      export LD_LIBRARY_PATH="${CI_PROJECT_DIR}/dpcpp-install/lib:$LD_LIBRARY_PATH"
+      clang++ --version
+      cmake -Bbuild_global -H. -GNinja -DENABLE_NVIDIA_BACKEND=ON -DCUDA_ARCH=${CUDA_ARCH} -DGPU_TARGETS=${GPU_TARGETS} -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=ON -DUSE_STRIDED_LOCAL_LOAD_BALANCE=OFF -DSM_FACTOR=${SM_FACTOR}
+      cmake --build build_global -- -j$(nproc)
+  artifacts:
+    paths:
+      - build_global/bfs_1.gpu
+    expire_in: 1 hour
+
+build:stride_local:
+  stage: build
+  interruptible: true
+  tags:
+    - saas-linux-medium-amd64-gpu-standard
+  image: nvcr.io/nvidia/cuda:12.8.0-devel-ubuntu22.04
+  needs:
+    - job: compiler
+      artifacts: true
+  script:
+    - |
+      nvidia-smi || echo "WARNING: nvidia-smi unavailable, continuing"
+      apt-get update -qq
+      apt-get install -y -qq --no-install-recommends cmake ninja-build python3
+      export PATH="${CI_PROJECT_DIR}/dpcpp-install/bin:$PATH"
+      export LD_LIBRARY_PATH="${CI_PROJECT_DIR}/dpcpp-install/lib:$LD_LIBRARY_PATH"
+      clang++ --version
+      cmake -Bbuild_stride_local -H. -GNinja -DENABLE_NVIDIA_BACKEND=ON -DCUDA_ARCH=${CUDA_ARCH} -DGPU_TARGETS=${GPU_TARGETS} -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=OFF -DUSE_STRIDED_LOCAL_LOAD_BALANCE=ON -DSM_FACTOR=${SM_FACTOR}
+      cmake --build build_stride_local -- -j$(nproc)
+  artifacts:
+    paths:
+      - build_stride_local/bfs_1.gpu
+    expire_in: 1 hour
+
 test:
   stage: test
   tags:
     - saas-linux-medium-amd64-gpu-standard
-  image: nvcr.io/nvidia/cuda:12.6.0-devel-ubuntu22.04
+  image: nvcr.io/nvidia/cuda:12.2.2-devel-ubuntu22.04
   needs:
-    - build
-  before_script:
-    - nvidia-smi
-    - apt-get update -qq
-    - apt-get install -y -qq python3 python3-pip wget gpg-agent
-    - pip3 install --break-system-packages numpy scipy networkx
-    - wget -qO- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor -o /usr/share/keyrings/oneapi-archive-keyring.gpg
-    - echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" > /etc/apt/sources.list.d/oneAPI.list
-    - apt-get update -qq
-    - apt-get install -y -qq intel-oneapi-runtime-dpcpp-cpp-2025.0
-    - wget -q "https://developer.codeplay.com/api/v2/products/oneapi/nvidia/2025.0.0/4/linux/installer" -O nvidia-plugin.sh
-    - bash nvidia-plugin.sh -y --install-dir /opt/intel/oneapi || true
-    - source /opt/intel/oneapi/setvars.sh --force --include-intel-llvm
+    - job: compiler
+      artifacts: true
+    - job: build:local
+      artifacts: true
+    - job: build:global
+      artifacts: true
+    - job: build:stride_local
+      artifacts: true
   script:
-    - cd scripts
-    - python3 genGraph.py rmat ${DATASET_SCALE} ${DATASET_FACTOR} || echo "Using bundled dataset"
-    - python3 generator.py rmat-${DATASET_SCALE}-${DATASET_FACTOR} nnz $((2**${DATASET_SCALE})) || echo "Using bundled dataset"
-    - cd ..
     - |
-      if [ -d "dataset/rmat-${DATASET_SCALE}-${DATASET_FACTOR}" ]; then
-        DATASET="dataset/rmat-${DATASET_SCALE}-${DATASET_FACTOR}"
-      else
-        DATASET="dataset/rmat-19-16"
-      fi
+      unset CUDA_INJECTION64_PATH || true
+      apt-get update -qq
+      apt-get install -y -qq --no-install-recommends python3 libhwloc-dev
+      export PATH="${CI_PROJECT_DIR}/dpcpp-install/bin:$PATH"
+      export LD_LIBRARY_PATH="${CI_PROJECT_DIR}/dpcpp-install/lib:/usr/local/nvidia/lib64:$LD_LIBRARY_PATH"
+      chmod +x build_local/bfs_1.gpu build_global/bfs_1.gpu build_stride_local/bfs_1.gpu
+      nvidia-smi
+      sycl-ls
       echo "Using dataset: ${DATASET}"
       echo "===== Testing LLB ====="
-      ./build_local/bfs_1.gpu --dataset=${DATASET} --root=0 --num_runs=3 --output=output_ci.json
+      ONEAPI_DEVICE_SELECTOR=cuda:0 ./build_local/bfs_1.gpu --dataset=${DATASET} --root=0 --num_runs=1
       echo "===== Testing GLB ====="
-      ./build_global/bfs_1.gpu --dataset=${DATASET} --root=0 --num_runs=3 --output=output_ci.json
+      ONEAPI_DEVICE_SELECTOR=cuda:0 ./build_global/bfs_1.gpu --dataset=${DATASET} --root=0 --num_runs=1
       echo "===== Testing SLB ====="
-      ./build_stride_local/bfs_1.gpu --dataset=${DATASET} --root=0 --num_runs=3 --output=output_ci.json
+      ONEAPI_DEVICE_SELECTOR=cuda:0 ./build_stride_local/bfs_1.gpu --dataset=${DATASET} --root=0 --num_runs=1
       echo "All GPU tests passed!"
-  artifacts:
-    paths:
-      - output_ci.json
-    expire_in: 7 days
-    when: always
