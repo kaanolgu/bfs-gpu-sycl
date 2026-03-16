@@ -4,8 +4,7 @@ workflow:
 
 stages:
   - compiler
-  - build
-  - test
+  - build_test
 
 variables:
   CUDA_ARCH: "75"
@@ -46,8 +45,8 @@ compiler:
       - dpcpp-install/
     expire_in: 1 week
 
-build:local:
-  stage: build
+build_test:
+  stage: build_test
   interruptible: true
   tags:
     - saas-linux-medium-amd64-gpu-standard
@@ -59,86 +58,17 @@ build:local:
     - |
       nvidia-smi || echo "WARNING: nvidia-smi unavailable, continuing"
       apt-get update -qq
-      apt-get install -y -qq --no-install-recommends cmake ninja-build python3
+      apt-get install -y -qq --no-install-recommends cmake ninja-build python3 libhwloc-dev
       export PATH="${CI_PROJECT_DIR}/dpcpp-install/bin:$PATH"
       export LD_LIBRARY_PATH="${CI_PROJECT_DIR}/dpcpp-install/lib:$LD_LIBRARY_PATH"
       clang++ --version
       cmake -Bbuild_local -H. -GNinja -DENABLE_NVIDIA_BACKEND=ON -DCUDA_ARCH=${CUDA_ARCH} -DGPU_TARGETS=${GPU_TARGETS} -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=OFF -DUSE_STRIDED_LOCAL_LOAD_BALANCE=OFF -DSM_FACTOR=${SM_FACTOR}
       cmake --build build_local -- -j$(nproc)
-  artifacts:
-    paths:
-      - build_local/bfs_1.gpu
-    expire_in: 1 hour
-
-build:global:
-  stage: build
-  interruptible: true
-  tags:
-    - saas-linux-medium-amd64-gpu-standard
-  image: nvcr.io/nvidia/cuda:12.8.0-devel-ubuntu22.04
-  needs:
-    - job: compiler
-      artifacts: true
-  script:
-    - |
-      nvidia-smi || echo "WARNING: nvidia-smi unavailable, continuing"
-      apt-get update -qq
-      apt-get install -y -qq --no-install-recommends cmake ninja-build python3
-      export PATH="${CI_PROJECT_DIR}/dpcpp-install/bin:$PATH"
-      export LD_LIBRARY_PATH="${CI_PROJECT_DIR}/dpcpp-install/lib:$LD_LIBRARY_PATH"
-      clang++ --version
       cmake -Bbuild_global -H. -GNinja -DENABLE_NVIDIA_BACKEND=ON -DCUDA_ARCH=${CUDA_ARCH} -DGPU_TARGETS=${GPU_TARGETS} -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=ON -DUSE_STRIDED_LOCAL_LOAD_BALANCE=OFF -DSM_FACTOR=${SM_FACTOR}
       cmake --build build_global -- -j$(nproc)
-  artifacts:
-    paths:
-      - build_global/bfs_1.gpu
-    expire_in: 1 hour
-
-build:stride_local:
-  stage: build
-  interruptible: true
-  tags:
-    - saas-linux-medium-amd64-gpu-standard
-  image: nvcr.io/nvidia/cuda:12.8.0-devel-ubuntu22.04
-  needs:
-    - job: compiler
-      artifacts: true
-  script:
-    - |
-      nvidia-smi || echo "WARNING: nvidia-smi unavailable, continuing"
-      apt-get update -qq
-      apt-get install -y -qq --no-install-recommends cmake ninja-build python3
-      export PATH="${CI_PROJECT_DIR}/dpcpp-install/bin:$PATH"
-      export LD_LIBRARY_PATH="${CI_PROJECT_DIR}/dpcpp-install/lib:$LD_LIBRARY_PATH"
-      clang++ --version
       cmake -Bbuild_stride_local -H. -GNinja -DENABLE_NVIDIA_BACKEND=ON -DCUDA_ARCH=${CUDA_ARCH} -DGPU_TARGETS=${GPU_TARGETS} -DENABLE_VERBOSE=OFF -DUSE_GLOBAL_LOAD_BALANCE=OFF -DUSE_STRIDED_LOCAL_LOAD_BALANCE=ON -DSM_FACTOR=${SM_FACTOR}
       cmake --build build_stride_local -- -j$(nproc)
-  artifacts:
-    paths:
-      - build_stride_local/bfs_1.gpu
-    expire_in: 1 hour
-
-test:
-  stage: test
-  tags:
-    - saas-linux-medium-amd64-gpu-standard
-  image: nvcr.io/nvidia/cuda:12.2.2-devel-ubuntu22.04
-  needs:
-    - job: compiler
-      artifacts: true
-    - job: build:local
-      artifacts: true
-    - job: build:global
-      artifacts: true
-    - job: build:stride_local
-      artifacts: true
-  script:
-    - |
       unset CUDA_INJECTION64_PATH || true
-      apt-get update -qq
-      apt-get install -y -qq --no-install-recommends python3 libhwloc-dev
-      export PATH="${CI_PROJECT_DIR}/dpcpp-install/bin:$PATH"
-      export LD_LIBRARY_PATH="${CI_PROJECT_DIR}/dpcpp-install/lib:/usr/local/nvidia/lib64:$LD_LIBRARY_PATH"
       chmod +x build_local/bfs_1.gpu build_global/bfs_1.gpu build_stride_local/bfs_1.gpu
       nvidia-smi
       sycl-ls
@@ -150,3 +80,9 @@ test:
       echo "===== Testing SLB ====="
       ONEAPI_DEVICE_SELECTOR=cuda:0 ./build_stride_local/bfs_1.gpu --dataset=${DATASET} --root=0 --num_runs=1
       echo "All GPU tests passed!"
+  artifacts:
+    paths:
+      - build_local/bfs_1.gpu
+      - build_global/bfs_1.gpu
+      - build_stride_local/bfs_1.gpu
+    expire_in: 1 hour
