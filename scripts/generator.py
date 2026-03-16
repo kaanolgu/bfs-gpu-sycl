@@ -194,55 +194,45 @@ class GraphMatrix:
             print ("Matrix stored in col-major format")
         print ("All data is located in " + targetDir + "\n")
 
-# Function to count comment lines
-def count_comment_lines(filepath, comment_chars=['%', '%%']):
-    with open(filepath, 'r') as file:
-        # Initialize line count
-        comment_line_count = 0
-        for line in file:
-            # Strip leading/trailing whitespace and check if the line starts with any of the comment characters
-            if line.strip().startswith(tuple(comment_chars)):
-                comment_line_count += 1
-            else:
-                # Stop counting when the first non-comment line is found
-                break
-    return comment_line_count
 
-def loadGraph(matrix,dim):
+def detect_format(path):
+    sep = '\t'
+    comment = '#'
+    skip = 0
+    with open(path, 'r') as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith('%'):
+                comment = '%'
+                skip += 1
+            elif stripped.startswith('#'):
+                comment = '#'
+                skip += 1
+            else:
+                if comment == '%':
+                    skip += 1  # skip the MTX dimension header line
+                sep = '\t' if '\t' in stripped else ' '
+                break
+    return sep, comment, skip
+
+def loadGraph(matrix, dim):
     name_matrix = str(matrix) + '.txt'
     path_to_go = localtxtFolder + name_matrix
-    
-    # load matrix from local file system
-    # r = scipy.io.loadmat(path_to_go)['M']
-    # List of target filenames with mtx format
-    file_names_from_mtx = [
-        "webbase-1M.txt",
-        "kron_g500-logn21.txt",
-        "indochina-2004.txt",
-        "hollywood-2009.txt",
-        "europe_osm.txt"
-    ]
-    # TODO: This is just a placeholder here, mtx matrices needs to be converted to edge list here
-    # Check if path_to_go matches any of the filenames
-    if name_matrix in file_names_from_mtx:
-        print(f"{path_to_go} is in the list of target filenames.")
-        # Count the number of comment lines
-        num_comment_lines = count_comment_lines(path_to_go)
 
-        # Load the data using numpy.loadtxt
-        arr = np.loadtxt(path_to_go, dtype=np.uint32, comments='%', skiprows=num_comment_lines + 1)
-    else:
-        arr = np.loadtxt(path_to_go, dtype=np.uint32,comments=['#', '$'])
+    sep, comment, skip = detect_format(path_to_go)
+    arr = np.loadtxt(path_to_go, dtype=float, comments=comment,
+                     delimiter=sep, usecols=[0, 1], skiprows=skip)
 
-    data = np.ones((len(arr[:, 0]),), dtype=np.uint32)
-    row = arr[:, 0]
-    col = arr[:, 1]
+    row = arr[:, 0].astype(np.uint32)
+    col = arr[:, 1].astype(np.uint32)
+    data = np.ones(len(row), dtype=np.uint32)
+
     if dim is None:
-        dim = max(np.max(row), np.max(col)) + 1 # Ensure `dim` covers all indices
-    csr_matrix = sparse.csr_matrix((data, (row, col)), shape=(dim, dim))
-    
+        dim = int(max(row.max(), col.max())) + 1
 
-    return csr_matrix
+    return sparse.csr_matrix((data, (row, col)), shape=(dim, dim))
 
 
 # increment base address by <increment> and ensure alignment to <align>
