@@ -15,7 +15,10 @@ jobs:
       - name: Push branch to GitLab and trigger pipeline
         run: |
           REF="${{ github.head_ref }}"
-
+          echo "PR branch: $REF"
+          echo "github.head_ref: ${{ github.head_ref }}"
+          echo "github.ref_name: ${{ github.ref_name }}"
+          
           git remote add gitlab https://oauth2:${{ secrets.GITLAB_API_TOKEN }}@gitlab.com/kaanolgu1/bfs-gpu-sycl.git
           git push gitlab HEAD:refs/heads/${REF} --force
 
