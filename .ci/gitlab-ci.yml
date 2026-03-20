@@ -13,7 +13,7 @@ variables:
   GPU_TARGETS: "1"
   DPCPP_NIGHTLY_URL: "https://github.com/intel/llvm/releases/download/nightly-2026-03-12/sycl_linux.tar.gz"
   DPCPP_TAG: "nightly-2026-03-12"
-  DATASET: "rmat-19-16-nnz"
+  DATASET: "rmat-18-16-nnz"
 
 compiler:
   stage: compiler
