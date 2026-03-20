@@ -1,8 +1,8 @@
 #ifndef __EXCEPTIONHANDLER_HPP__
 #define __EXCEPTIONHANDLER_HPP__
-#include <sycl/sycl.hpp>
 #include <exception>
 #include <iostream>
+#include <sycl/sycl.hpp>
 
 namespace gpu_tools {
 
@@ -17,6 +17,6 @@ void exception_handler(sycl::exception_list exceptions) {
   }
 }
 
-} // namespace gpu_tools
+}  // namespace gpu_tools
 
-#endif //__EXCEPTIONHANDLER_HPP__
+#endif  //__EXCEPTIONHANDLER_HPP__
