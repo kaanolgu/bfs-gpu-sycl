@@ -1,9 +1,8 @@
 #pragma once
 #include <map>
 
-#include "unrolled_loop.hpp"
 #include "json.hpp"
-
+#include "unrolled_loop.hpp"
 
 class CommandLineParser {
  public:
