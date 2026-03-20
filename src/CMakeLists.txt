@@ -1,6 +1,19 @@
 set(SOURCE_FILE host.cpp)
 set(TARGET_NAME bfs)
-
+include(FetchContent)
+FetchContent_Declare(
+    hdf5
+    URL https://github.com/HDFGroup/hdf5/releases/download/hdf5_1.14.6/hdf5-1.14.6.tar.gz
+)
+set(HDF5_BUILD_CPP_LIB ON CACHE BOOL "")
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "")
+set(BUILD_TESTING OFF CACHE BOOL "")
+set(HDF5_BUILD_TOOLS OFF CACHE BOOL "")
+set(HDF5_BUILD_EXAMPLES OFF CACHE BOOL "")
+set(HDF5_BUILD_UTILS OFF CACHE BOOL "")
+set(HDF5_ENABLE_THREADSAFE ON CACHE BOOL "")
+set(ALLOW_UNSUPPORTED ON CACHE BOOL "")
+FetchContent_MakeAvailable(hdf5)
  
 # Define a backend
 option(ENABLE_NVIDIA_BACKEND "Enable the NVIDIA backend" OFF)
@@ -53,8 +66,10 @@ endif()
 # Loop through the list of GPU targets
 foreach(GPU_NUMBER IN LISTS GPU_TARGET_LIST)
     set(GPU_TARGET ${TARGET_NAME}_${GPU_NUMBER}.gpu)
-
     add_executable(${GPU_TARGET} ${SOURCE_FILE})
+
+    target_link_libraries(${GPU_TARGET} PUBLIC hdf5_cpp-static hdf5-static)
+    target_include_directories(${GPU_TARGET} PUBLIC ${hdf5_BINARY_DIR} ${hdf5_SOURCE_DIR}/src ${hdf5_SOURCE_DIR}/c++/src)
     target_include_directories(${GPU_TARGET} PUBLIC ${PROJECT_SOURCE_DIR}/include)
     target_include_directories(${GPU_TARGET} PUBLIC ${PROJECT_SOURCE_DIR}/src)
     target_compile_definitions(${GPU_TARGET} PUBLIC NUM_GPU=${GPU_NUMBER})

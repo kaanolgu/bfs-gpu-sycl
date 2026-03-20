@@ -6,7 +6,7 @@ from scipy import io
 from scipy import sparse
 from numpy import inf
 import numpy as np
-import networkx as nx
+import h5py
 
 def round8(a):
     return int(a) + 4 & ~7
@@ -18,6 +18,10 @@ relative_path = "../dataset/"
 relative_path_localtxt = "txt/"
 graphDataRoot = os.path.join(absolute_path, relative_path)
 localtxtFolder = os.path.join(absolute_path, relative_path_localtxt)
+
+# HDF5 compression settings
+COMPRESSION = "gzip"
+COMPRESSION_OPTS = 4
 
 def nnzSplit(
     matrix: sparse.sparray, n_compute_units: int = 4,
@@ -78,9 +82,7 @@ def buildGraphManager(dim,pick,csr = False):
             # SpMV BFS needs transpose of matrix
             graph = graph.transpose()
         g = g.replace("/", "-")
-        for num_partition in num_cu:
-            print("Graph " + g + " with " + str(num_partition) + " partitions")
-            m.prepareGraph(g, num_partition, graph,csr, pick)
+        m.prepareGraph(g, graph, csr, pick)
         
       
 def buildGraphManagerSingle(name,dim,pick, csr = False):
@@ -97,10 +99,7 @@ def buildGraphManagerSingle(name,dim,pick, csr = False):
         # SpMV BFS needs transpose of matrix
         graph = graph.transpose()
     g = g.replace("/", "-")
-    # Call prepareGraph with the loaded graph for each partition count
-    for num_partition in num_cu:
-        print("Graph " + g + " with " + str(num_partition) + " partitions")
-        m.prepareGraph(g, num_partition, graph,csr, pick)
+    m.prepareGraph(g, graph, csr, pick)
       
 
 
@@ -112,32 +111,28 @@ class GraphMatrix:
     def resetCommandBuffer(self):
         self.copyCommandBuffer = []
 
-    def serializeGraphData(self, graph, name, rootFolder,index,PrevRowsValue):
+    def serializeGraphData(self, gpu_group, graph, name, index, PrevRowsValue):
         # Check that the data type is correct
         print(f"graph.indices dtype  {graph.indices.dtype}")
         print(f"graph.indptr dtype  {graph.indptr.dtype}")
 
-        # save index pointers
-        fileName = rootFolder + "/" + name + "-indptr.bin"
-        indPtrFile = open(fileName, "wb")
-        # Convert `indptr` to uint32 if it’s not already
+        # Convert `indptr` to uint32 if it's not already
         indptr_data = graph.indptr
         if indptr_data.dtype != np.uint32:
             if graph.nnz <= np.iinfo(np.uint32).max:
                 indptr_data = indptr_data.astype(np.uint32)
 
-        indPtrFile.write(indptr_data.tobytes())
-        indPtrFile.close()
-
-        # save indices
-        fileName = rootFolder + "/" + name + "-inds.bin"
-        indsFile = open(fileName, "wb")
         indices_data =  graph.indices + PrevRowsValue
         if indices_data.dtype != np.uint32:
             if graph.nnz <= np.iinfo(np.uint32).max:
                 indices_data = indices_data.astype(np.uint32)
-        indsFile.write(indices_data.tobytes())
-        indsFile.close()
+
+        # save into HDF5 partition group
+        pgrp = gpu_group.create_group(f"partition_{index}")
+        pgrp.create_dataset("indptr", data=indptr_data,
+                            compression=COMPRESSION, compression_opts=COMPRESSION_OPTS)
+        pgrp.create_dataset("indices", data=indices_data,
+                            compression=COMPRESSION, compression_opts=COMPRESSION_OPTS)
 
         print("Rows = " + str(graph.shape[0]))
         print("Cols = " + str(graph.shape[1]))
@@ -148,51 +143,73 @@ class GraphMatrix:
 
 
 
-    def prepareGraph(self, graphName, partitionCount, graph, csr, pick):
-        # create the graph partitions list
-        partitions = []
-        if(pick == "row"):
-            partitions = rowSplit(graph,partitionCount)
-        elif pick == "nnz":
-            partitions = nnzSplit(graph,partitionCount)
-        # add subfolder with name and part count
-        targetDir = graphDataRoot + graphName + "-" + str(partitionCount)
-        # create the target dir if it does not exist
-        if not os.path.exists(targetDir):
-            os.makedirs(targetDir)
-        # serialize the graph data and build commands
-        i = 0
+    def prepareGraph(self, graphName, graph, csr, pick):
+        # create the HDF5 file for this graph
+        os.makedirs(graphDataRoot, exist_ok=True)
+        h5_path = os.path.join(graphDataRoot, graphName + ".h5")
 
-        startRow = 0
-        savedRows = 0
-        metafileName = targetDir + "/" + graphName + "-meta.bin"
-        metaDataFile = open(metafileName, "wb")
+        with h5py.File(h5_path, "w") as h5f:
+            h5f.attrs["graph_name"] = graphName
+            h5f.attrs["format"] = "csr" if csr else "csc"
+            h5f.attrs["partition_mode"] = pick
 
-        for i, part in enumerate(partitions):
-            # savedRows = break_idx[i]
-            print ("\n------------\n"+"Partition " + str(i) + "\n------------")
-            # write the metadata base ptr into
-            if (csr):
-                res = self.serializeGraphData(part, graphName + "-" + str(i),
-                                              targetDir,i,savedRows)
-            else:
-                res = self.serializeGraphData(part, graphName + "-" + str(i),
-                                              targetDir,i,savedRows)
-            savedRows += res
-            metaDataFile.write(struct.pack("I", part.shape[0]))  # uint32
-            metaDataFile.write(struct.pack("I", part.shape[1]))  # uint32
-            metaDataFile.write(struct.pack("Q", part.nnz))       # uint64
-            metaDataFile.write(struct.pack("I", startRow))       # uint32
-            #update start row
-            startRow += part.shape[0]  
-        
-        metaDataFile.close()
-        print ("Graph " + graphName + " prepared with " + str(partitionCount) + " partitions")
-        if csr:
-            print("Matrix stored in row-major format")
-        else:
-            print ("Matrix stored in col-major format")
-        print ("All data is located in " + targetDir + "\n")
+            for num_partition in num_cu:
+                print("Graph " + graphName + " with " + str(num_partition) + " partitions")
+
+                # create the graph partitions list
+                partitions = []
+                if(pick == "row"):
+                    partitions = rowSplit(graph,num_partition)
+                elif pick == "nnz":
+                    partitions = nnzSplit(graph,num_partition)
+
+                # create HDF5 group for this GPU count
+                gpu_group = h5f.create_group(f"gpus_{num_partition}")
+
+                # serialize the graph data and build commands
+                i = 0
+
+                startRow = 0
+                savedRows = 0
+
+                # Build meta arrays
+                meta32_list = []
+                meta64_list = []
+
+                for i, part in enumerate(partitions):
+                    # savedRows = break_idx[i]
+                    print ("\n------------\n"+"Partition " + str(i) + "\n------------")
+                    # write the metadata base ptr into
+                    if (csr):
+                        res = self.serializeGraphData(gpu_group, part, graphName + "-" + str(i),
+                                                      i,savedRows)
+                    else:
+                        res = self.serializeGraphData(gpu_group, part, graphName + "-" + str(i),
+                                                      i,savedRows)
+                    savedRows += res
+                    meta32_list.append(np.uint32(part.shape[0]))  # uint32
+                    meta32_list.append(np.uint32(part.shape[1]))  # uint32
+                    meta64_list.append(np.uint64(part.nnz))       # uint64
+                    meta32_list.append(np.uint32(startRow))       # uint32
+                    #update start row
+                    startRow += part.shape[0]  
+
+                # Write meta arrays into the gpu group
+                gpu_group.create_dataset("meta32",
+                                         data=np.array(meta32_list, dtype=np.uint32),
+                                         compression=COMPRESSION, compression_opts=COMPRESSION_OPTS)
+                gpu_group.create_dataset("meta64",
+                                         data=np.array(meta64_list, dtype=np.uint64),
+                                         compression=COMPRESSION, compression_opts=COMPRESSION_OPTS)
+                
+                print ("Graph " + graphName + " prepared with " + str(num_partition) + " partitions")
+                if csr:
+                    print("Matrix stored in row-major format")
+                else:
+                    print ("Matrix stored in col-major format")
+
+        size_mb = os.path.getsize(h5_path) / (1024 * 1024)
+        print ("All data is located in " + h5_path + " (" + f"{size_mb:.2f}" + " MB)\n")
 
 
 def detect_format(path):

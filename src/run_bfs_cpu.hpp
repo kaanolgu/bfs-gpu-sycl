@@ -1,3 +1,53 @@
+#include <H5Cpp.h>
+void saveCpuReference(const std::string &h5path,
+                      const std::vector<int> &host_level,
+                      int start_vertex) {
+    H5::H5File file(h5path, H5F_ACC_RDWR);
+    
+    // Create cpu_reference group if it doesn't exist
+    H5::Group refGroup;
+    if (H5Lexists(file.getId(), "cpu_reference", H5P_DEFAULT) > 0) {
+        refGroup = file.openGroup("cpu_reference");
+    } else {
+        refGroup = file.createGroup("cpu_reference");
+    }
+    
+    std::string dsName = "root_" + std::to_string(start_vertex);
+    
+    // Delete if exists (re-run with same root)
+    if (H5Lexists(refGroup.getId(), dsName.c_str(), H5P_DEFAULT) > 0) {
+        refGroup.unlink(dsName);
+    }
+    
+    hsize_t dims = host_level.size();
+    H5::DataSpace space(1, &dims);
+    H5::DataSet ds = refGroup.createDataSet(dsName, H5::PredType::NATIVE_INT32, space);
+    ds.write(host_level.data(), H5::PredType::NATIVE_INT32);
+}
+bool loadCpuReference(const std::string &h5path,
+                      std::vector<int> &host_level,
+                      int start_vertex) {
+    H5::H5File file(h5path, H5F_ACC_RDONLY);
+    
+    if (H5Lexists(file.getId(), "cpu_reference", H5P_DEFAULT) <= 0) {
+        return false;
+    }
+    
+    std::string dsName = "root_" + std::to_string(start_vertex);
+    std::string fullPath = "cpu_reference/" + dsName;
+    
+    if (H5Lexists(file.getId(), fullPath.c_str(), H5P_DEFAULT) <= 0) {
+        return false;
+    }
+    
+    H5::Group grp = file.openGroup("cpu_reference");
+    H5::DataSet ds = grp.openDataSet(dsName);
+    hsize_t n = ds.getSpace().getSimpleExtentNpoints();
+    host_level.resize(n);
+    ds.read(host_level.data(), H5::PredType::NATIVE_INT32);
+    return true;
+}
+
 //----------------------------------------------------------
 //--bfs on cpu with multi-dimensional indptr and indices
 //--programmer: jianbin (modified)
