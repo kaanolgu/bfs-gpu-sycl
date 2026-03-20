@@ -94,26 +94,27 @@ using make_index_pow2_sequence = integer_pow2_sequence<std::size_t, N>;
 // Checks for existence of subscript operator
 //
 namespace detail {
-template <typename... >
+template <typename...>
 using void_t = void;
 
-template<class T, typename = void>
-struct has_subscript_impl : std::false_type { };
+template <class T, typename = void>
+struct has_subscript_impl : std::false_type {};
 
-template<typename T>
-struct has_subscript_impl<T, void_t<decltype(std::declval<T>()[1])>> 
-  : std::true_type { };
+template <typename T>
+struct has_subscript_impl<T, void_t<decltype(std::declval<T>()[1])>>
+    : std::true_type {};
 }  // namespace detail
 
 template <typename T>
 struct has_subscript {
   static constexpr bool value =
-    std::is_same_v<typename detail::has_subscript_impl<T>::type, std::true_type>;
+      std::is_same_v<typename detail::has_subscript_impl<T>::type,
+                     std::true_type>;
 };
 
 template <typename T>
 inline constexpr bool has_subscript_v = has_subscript<T>::value;
 
-} // namespace gpu_tools
+}  // namespace gpu_tools
 
-#endif  /* __METAPROGRAMMING_UTILS_HPP__ */
+#endif /* __METAPROGRAMMING_UTILS_HPP__ */
