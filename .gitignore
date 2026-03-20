@@ -10,4 +10,6 @@ data.json
 *.out
 *.nsys*
 *.ncu*
-run-logs/
+run-logs/build_*/
+output_*.json/
+pyenv/

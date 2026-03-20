@@ -1,132 +1,115 @@
-#include <filesystem>
-#include <fstream>
+#pragma once
+// graph_load.hpp — HDF5 edition
+//
+// The HDF5 file layout expected:
+//
+//   <graph>-<mode>-csc.h5          (one file per dataset)
+//     gpus_<N>/
+//       meta32    [uint32 dataset]
+//       meta64    [uint64 dataset]
+//       partition_0/
+//         indptr   [uint32 dataset]
+//         indices  [uint32 dataset]
+//       partition_1/ ...
+//       ...
+
+#include <H5Cpp.h>
+
+#include <cstdint>
 #include <iostream>
 #include <stdexcept>
+#include <string>
+#include <thread>
 #include <vector>
-// CSR structure to hold the graph
+
 struct CSRGraph {
-  // Use single vectors for when partitionCount is 1
   std::vector<uint32_t> meta32;
   std::vector<uint64_t> meta64;
+
+  // Single-partition path
   std::vector<uint32_t> indptr;
   std::vector<uint32_t> inds;
 
-  // Use vectors of vectors for when partitionCount is greater than 1
+  // Multi-partition path
   std::vector<std::vector<uint32_t>> indptrMulti;
   std::vector<std::vector<uint32_t>> indsMulti;
 
-  // Flag to check if we're using multi-dimensional vectors
   bool isMultiDimensional = false;
 };
 
-void readFromMM(const char *filename, std::vector<uint32_t> &buffer) {
+namespace hdf5_detail {
+
+/// Read a 1-D HDF5 dataset into a std::vector<T>.
+template <typename T>
+inline void readDataset(const H5::Group &group, const std::string &name,
+                        std::vector<T> &dst, const H5::PredType &memType) {
+  H5::DataSet ds = group.openDataSet(name);
+  H5::DataSpace space = ds.getSpace();
+  hsize_t n = space.getSimpleExtentNpoints();
+  dst.resize(static_cast<size_t>(n));
+  ds.read(dst.data(), memType);
 #if VERBOSE == 1
-  std::cout << "- Reading " << filename << "...";
-#endif
-  std::ifstream file(filename, std::ios::binary);
-  if (!file) {
-    std::cerr << "ERROR: File " << filename << " not found!" << std::endl;
-    throw std::runtime_error("File not found");
-  }
-
-  file.seekg(0, std::ios::end);
-  std::streampos fileSize = file.tellg();
-  file.seekg(0, std::ios::beg);
-
-  if (fileSize == 0) {
-    std::cerr << "ERROR: File size is 0!" << std::endl;
-    throw std::runtime_error("File size is 0");
-  }
-
-  size_t originalSize = buffer.size();
-  buffer.resize(originalSize + fileSize / sizeof(uint32_t));
-  file.read(reinterpret_cast<char *>(buffer.data() + originalSize), fileSize);
-#if VERBOSE == 1
-  std::cout << " OK" << std::endl;
+  std::cout << "  - read " << name << "  (" << n << " elements)" << std::endl;
 #endif
 }
-void readFromMM_meta(const char *filename, std::vector<uint32_t> &buffer32,
-                     std::vector<uint64_t> &buffer64) {
-#if VERBOSE == 1
-  std::cout << "- Reading " << filename << "...";
-#endif
-  std::ifstream file(filename, std::ios::binary);
-  if (!file) {
-    std::cerr << "ERROR: File " << filename << " not found!" << std::endl;
-    throw std::runtime_error("File not found");
-  }
 
-  // Reading data in the specified pattern
-  uint32_t data32;
-  uint64_t data64;
-  while (file) {
-    // Read the first 4-byte integer
-    file.read(reinterpret_cast<char *>(&data32), sizeof(uint32_t));
-    if (!file) break;  // Check for EOF
-    buffer32.push_back(data32);
+}  // namespace hdf5_detail
 
-    // Read the second 4-byte integer
-    file.read(reinterpret_cast<char *>(&data32), sizeof(uint32_t));
-    if (!file) break;
-    buffer32.push_back(data32);
+// Main loader
 
-    // Read the 8-byte integer
-    file.read(reinterpret_cast<char *>(&data64), sizeof(uint64_t));
-    if (!file) break;
-    buffer64.push_back(data64);
-
-    // Read the final 4-byte integer
-    file.read(reinterpret_cast<char *>(&data32), sizeof(uint32_t));
-    if (!file) break;
-    buffer32.push_back(data32);
-  }
-
-  if (file.bad()) {
-    std::cerr << "ERROR: Error reading file " << filename << std::endl;
-    throw std::runtime_error("Error reading file");
-  }
-
-#if VERBOSE == 1
-  std::cout << " OK" << std::endl;
-#endif
-}
-CSRGraph loadMatrix(uint32_t partitionCount, std::string datasetName) {
+inline CSRGraph loadMatrix(uint32_t partitionCount,
+                           const std::string &datasetName) {
   CSRGraph graph;
-#if VERBOSE == 1
-  std::cout << "Loading matrix " << datasetName << " with " << partitionCount
-            << " partitions..." << std::endl;
-#endif
+
+  // Build path to the single HDF5 file for this dataset
   std::string pth = "/dataset/";
-  std::string non_switch = getenv("PWD") + pth;
-  std::string temp = datasetName;
-  non_switch +=
-      temp + "-csc-" + std::to_string(partitionCount) + "/" + temp + "-csc-";
-  std::string str_meta = non_switch + "meta.bin";
-  readFromMM_meta(str_meta.c_str(), graph.meta32, graph.meta64);
+  std::string base = std::string(getenv("PWD")) + pth;
+  std::string h5path = base + datasetName + "-csc.h5";
 
+#if VERBOSE == 1
+  std::cout << "Loading " << h5path << "  (gpus_" << partitionCount << ")"
+            << std::endl;
+#endif
+
+  H5::H5File file(h5path, H5F_ACC_RDONLY);
+
+  // Open the group for the requested partition count
+  std::string groupName = "gpus_" + std::to_string(partitionCount);
+  H5::Group partGroup = file.openGroup(groupName);
+
+  // Meta arrays
+  hdf5_detail::readDataset(partGroup, "meta32", graph.meta32,
+                           H5::PredType::NATIVE_UINT32);
+  hdf5_detail::readDataset(partGroup, "meta64", graph.meta64,
+                           H5::PredType::NATIVE_UINT64);
+
+  // Partition data
   if (partitionCount == 1) {
-    // Load data into single-dimensional vectors
-    std::string str_indptr = non_switch + "0-indptr.bin";
-    std::string str_inds = non_switch + "0-inds.bin";
-
-    readFromMM(str_indptr.c_str(), graph.indptr);
-    readFromMM(str_inds.c_str(), graph.inds);
+    H5::Group p = partGroup.openGroup("partition_0");
+    hdf5_detail::readDataset(p, "indptr", graph.indptr,
+                             H5::PredType::NATIVE_UINT32);
+    hdf5_detail::readDataset(p, "indices", graph.inds,
+                             H5::PredType::NATIVE_UINT32);
   } else {
-    // Use multi-dimensional vectors for multiple partitions
     graph.isMultiDimensional = true;
-
     graph.indptrMulti.resize(partitionCount);
     graph.indsMulti.resize(partitionCount);
 
-    for (uint32_t i = 0; i < partitionCount; i++) {
-      // std::string str_meta = non_switch + std::to_string(i) + "-meta.bin";
-      std::string str_indptr = non_switch + std::to_string(i) + "-indptr.bin";
-      std::string str_inds = non_switch + std::to_string(i) + "-inds.bin";
-
-      readFromMM(str_indptr.c_str(), graph.indptrMulti[i]);
-      readFromMM(str_inds.c_str(), graph.indsMulti[i]);
+    std::vector<std::thread> threads;
+    for (uint32_t i = 0; i < partitionCount; ++i) {
+      threads.emplace_back([&, i]() {
+        // Each thread opens its own file handle (HDF5 is not thread-safe on
+        // shared handles)
+        H5::H5File localFile(h5path, H5F_ACC_RDONLY);
+        H5::Group localGroup =
+            localFile.openGroup(groupName + "/partition_" + std::to_string(i));
+        hdf5_detail::readDataset(localGroup, "indptr", graph.indptrMulti[i],
+                                 H5::PredType::NATIVE_UINT32);
+        hdf5_detail::readDataset(localGroup, "indices", graph.indsMulti[i],
+                                 H5::PredType::NATIVE_UINT32);
+      });
     }
+    for (auto &t : threads) t.join();
   }
-
   return graph;
 }

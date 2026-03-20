@@ -13,7 +13,7 @@ variables:
   GPU_TARGETS: "1"
   DPCPP_NIGHTLY_URL: "https://github.com/intel/llvm/releases/download/nightly-2026-03-12/sycl_linux.tar.gz"
   DPCPP_TAG: "nightly-2026-03-12"
-  DATASET: "rmat-19-16-nnz"
+  DATASET: "rmat-18-16-nnz"
 
 compiler:
   stage: compiler
@@ -59,7 +59,7 @@ build_test:
     - |
       nvidia-smi || echo "WARNING: nvidia-smi unavailable, continuing"
       apt-get update -qq
-      apt-get install -y -qq --no-install-recommends cmake ninja-build python3 libhwloc-dev
+      apt-get install -y -qq --no-install-recommends cmake ninja-build python3 libhwloc-dev zlib1g-dev libhdf5-dev
       export PATH="${CI_PROJECT_DIR}/dpcpp-install/bin:$PATH"
       export LD_LIBRARY_PATH="${CI_PROJECT_DIR}/dpcpp-install/lib:$LD_LIBRARY_PATH"
       clang++ --version

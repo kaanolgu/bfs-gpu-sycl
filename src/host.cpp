@@ -151,27 +151,59 @@ int main(int argc, char* argv[]) {
   //////////////////////////////////////////////////
   // CPU
   //////////////////////////////////////////////////
-
-  // initalize the memory again
-  std::vector<uint8_t> host_graph_mask(numCols, 0);
-  std::vector<uint8_t> host_updating_graph_mask(numCols, 0);
-  std::vector<uint8_t> host_graph_visited(numCols, 0);
+  std::string h5path =
+      std::string(getenv("PWD")) + "/dataset/" + datasetName + "-csc.h5";
   std::vector<int> host_level(numCols, -1);
+  bool hasCachedResult = loadCpuReference(h5path, host_level, start_vertex);
 
-  // set the start_vertex node as 1 in the mask
-  host_graph_mask[start_vertex] = 1;
-  host_graph_visited[start_vertex] = 1;
-  host_level[start_vertex] = 0;
-  std::vector<DeviceInfo> host_run_statistics;
+  if (!hasCachedResult) {
+    std::cout << "No cached CPU result for root " << start_vertex
+              << ", computing..." << std::endl;
 
-  if (NUM_GPU > 1) {
-    run_bfs_cpu(numRows, graph.indptrMulti, graph.indsMulti, host_graph_mask,
-                host_updating_graph_mask, host_graph_visited, host_level,
-                newJsonObj, h_visit_offsets, host_run_statistics);
+    std::vector<uint8_t> host_graph_mask(numCols, 0);
+    std::vector<uint8_t> host_updating_graph_mask(numCols, 0);
+    std::vector<uint8_t> host_graph_visited(numCols, 0);
+    host_graph_mask[start_vertex] = 1;
+    host_graph_visited[start_vertex] = 1;
+    host_level[start_vertex] = 0;
+    std::vector<DeviceInfo> host_run_statistics;
+
+    if (NUM_GPU > 1) {
+      run_bfs_cpu(numRows, graph.indptrMulti, graph.indsMulti, host_graph_mask,
+                  host_updating_graph_mask, host_graph_visited, host_level,
+                  newJsonObj, h_visit_offsets, host_run_statistics);
+    } else {
+      run_bfs_cpu(numRows, graph.indptr, graph.inds, host_graph_mask,
+                  host_updating_graph_mask, host_graph_visited, host_level,
+                  newJsonObj, h_visit_offsets, host_run_statistics);
+    }
+
+    saveCpuReference(h5path, host_level, start_vertex);
+    std::cout << "CPU result cached for root " << start_vertex << std::endl;
+
   } else {
-    run_bfs_cpu(numRows, graph.indptr, graph.inds, host_graph_mask,
-                host_updating_graph_mask, host_graph_visited, host_level,
-                newJsonObj, h_visit_offsets, host_run_statistics);
+    std::cout << "Using cached CPU result for root " << start_vertex
+              << std::endl;
+
+    // Count explored edges from cached levels
+    uint64_t exploredEdgesCount = 0;
+    if (NUM_GPU > 1) {
+      for (uint32_t tid = 0; tid < numRows; tid++) {
+        if (host_level[tid] != -1) {
+          for (int j = 0; j < NUM_GPU; ++j) {
+            exploredEdgesCount +=
+                graph.indptrMulti[j][tid + 1] - graph.indptrMulti[j][tid];
+          }
+        }
+      }
+    } else {
+      for (uint32_t tid = 0; tid < numRows; tid++) {
+        if (host_level[tid] != -1) {
+          exploredEdgesCount += graph.indptr[tid + 1] - graph.indptr[tid];
+        }
+      }
+    }
+    newJsonObj["edgesCount"] = exploredEdgesCount;
   }
   // Select the element with the maximum value
   // Use GPU results because in large scales we won't have CPU results to
