@@ -2,6 +2,7 @@
 //--bfs on cpu with multi-dimensional indptr and indices
 //--programmer: jianbin (modified)
 //----------------------------------------------------------
+#include "functions.hpp"
 template <typename vectorT>
 void run_bfs_cpu(uint32_t no_of_nodes,
                  vectorT &source_indptr,  // Multi-dimensional source_indptr
