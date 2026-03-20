@@ -1,0 +1,21 @@
+name: clang-format check
+
+on:
+  pull_request:
+
+jobs:
+  format-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: sudo apt-get install -y clang-format
+
+      - name: Run clang-format dry-run
+        run: |
+          find src include \( -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) \
+            ! -name 'json.hpp' | \
+          xargs clang-format --dry-run --Werror
